@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"/c/Users/bsy/Documents/Amaranth10/CGown.com/\" | head -50; file \"/c/Users/bsy/Documents/Amaranth10/CGown.com/UVTools_3.3.08.mzp\")",
+      "Bash(cd \"/c/Users/bsy/AppData/Local/Temp/claude/C--Users-bsy-Desktop-Claude/d29e64d5-6f76-4179-a164-5ce225e2061f/scratchpad/uvtools\" && find . -type f | head -200 && echo \"---count---\" && find . -type f | wc -l)"
+    ]
+  }
+}

@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Smart Factory Digital Twin - Layout Prototype</title>
+
+<!-- Tailwind CSS (Play CDN) -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- React / lucide-react ESM 매핑 -->
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.454.0?external=react"
+  }
+}
+</script>
+
+<!-- JSX 트랜스파일러 -->
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+<style>
+  html, body, #root { height: 100%; margin: 0; background: #020617; }
+  body { font-family: "Pretendard", "Malgun Gothic", system-ui, -apple-system, sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(148,163,184,.3); border-radius: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  #boot { position: fixed; inset: 0; display: grid; place-items: center; color: #64748b;
+          font-size: 13px; letter-spacing: .05em; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot">LOADING TWINOPS PROTOTYPE…</div>
+
+<script type="text/babel" data-type="module" data-presets="react">
+/**
+ * =============================================================================
+ *  Smart Factory Digital Twin - Monitoring SPA Layout Prototype
+ * =============================================================================
+ *  Stack : React (Function Component + Hooks) / Tailwind CSS / lucide-react
+ *
+ *  [ 컴포넌트 분리 가이드 ]
+ *  프로토타입 검증 후 아래와 같이 파일을 분리하는 것을 권장합니다.
+ *
+ *  src/
+ *   ├─ layouts/
+ *   │   └─ DigitalTwinLayout.jsx        // 최상위 grid 뼈대 + 전역 state(mode, selected)
+ *   ├─ context/
+ *   │   └─ TwinContext.jsx              // mode / estop / selectedAsset 전역 공유 (Context or Zustand)
+ *   ├─ theme/
+ *   │   └─ theme.js                     // THEME 상수 (운전/시뮬레이션 색상 토큰)
+ *   ├─ components/
+ *   │   ├─ gnb/
+ *   │   │   ├─ TopGnb.jsx               // GNB 컨테이너
+ *   │   │   ├─ PlantSelector.jsx        // 공장/라인 드롭다운
+ *   │   │   ├─ ModeToggle.jsx           // 운전/시뮬레이션 토글
+ *   │   │   └─ EmergencyStopButton.jsx  // E-STOP + 확인 모달
+ *   │   ├─ left/
+ *   │   │   ├─ LeftDashboardPanel.jsx   // 좌측 패널 컨테이너
+ *   │   │   ├─ LineProgress.jsx         // 라인 진행률 프로그레스바
+ *   │   │   ├─ JobQueueList.jsx         // 작업 대기열 + 액션 버튼
+ *   │   │   └─ SimSpeedSlider.jsx       // 시뮬레이션 배속 슬라이더
+ *   │   ├─ viewport/
+ *   │   │   ├─ TwinViewport.jsx         // Three.js / Cesium 마운트 지점 (canvas ref)
+ *   │   │   ├─ ViewportToolbar.jsx      // 카메라/레이어 컨트롤
+ *   │   │   └─ CctvPipPanel.jsx         // CCTV PIP 오버레이
+ *   │   └─ right/
+ *   │       ├─ AssetDetailSidebar.jsx   // 우측 사이드바 컨테이너(슬라이드 애니메이션)
+ *   │       ├─ AssetInfoSection.jsx     // 기본 정보 / 점검 이력
+ *   │       ├─ AssetStatusLamp.jsx      // 상태등
+ *   │       ├─ AssetSimControl.jsx      // 시뮬레이션 제어 폼
+ *   │       └─ AssetMemoField.jsx       // 작업자 메모
+ *   └─ hooks/
+ *       ├─ useTwinRenderer.js           // GLB 로딩 / GIS 좌표 정합 / 렌더 루프
+ *       └─ useAssetSelection.js         // 3D raycast pick → selectedAsset 동기화
+ *
+ *  [ 3D 연동 지점 ]
+ *  TwinViewport 내부 <canvas ref={canvasRef}> 하나만 넘겨주면
+ *  useTwinRenderer(canvasRef) 에서 Three.js WebGLRenderer / Cesium Viewer 를
+ *  생성하도록 설계했습니다. React는 리렌더에 관여하지 않습니다(ref 고정).
+ * =============================================================================
+ */
+
+import React, { useMemo, useRef, useState } from 'react';
+import {
+  Activity,
+  AlertOctagon,
+  Boxes,
+  Camera,
+  ChevronDown,
+  Clock,
+  Cpu,
+  Factory,
+  Gauge,
+  GripVertical,
+  Layers,
+  Maximize2,
+  Move3d,
+  Pause,
+  Play,
+  Plus,
+  RotateCcw,
+  Save,
+  Settings2,
+  StickyNote,
+  Trash2,
+  Upload,
+  User,
+  Video,
+  Wrench,
+  X,
+} from 'lucide-react';
+
+/* ---------------------------------------------------------------------------
+ * 1. Theme Token
+ *    Tailwind JIT 는 문자열을 정적으로 스캔하므로, 클래스는 "완성된 형태"로 보관합니다.
+ *    (`bg-${color}-500` 같은 동적 조합은 빌드 시 purge 되므로 금지)
+ * ------------------------------------------------------------------------- */
+const THEME = {
+  operation: {
+    label: '운전 모드',
+    ring: 'ring-slate-700',
+    panelBorder: 'border-slate-700/80',
+    panelBg: 'bg-slate-900/80',
+    headerBg: 'bg-slate-900',
+    accentText: 'text-sky-400',
+    accentBg: 'bg-sky-500',
+    accentBgSoft: 'bg-sky-500/10',
+    accentBorder: 'border-sky-500/40',
+    accentRing: 'focus:ring-sky-500/60',
+    barFrom: 'from-sky-500',
+    barTo: 'to-cyan-400',
+    glow: 'shadow-[0_0_0_1px_rgba(148,163,184,0.15)]',
+    viewportGrid: 'bg-slate-950',
+    chip: 'bg-slate-800 text-slate-300 border-slate-700',
+  },
+  simulation: {
+    label: '시뮬레이션 모드',
+    ring: 'ring-fuchsia-500/60',
+    panelBorder: 'border-fuchsia-500/40',
+    panelBg: 'bg-[#160f22]/85',
+    headerBg: 'bg-[#160f22]',
+    accentText: 'text-fuchsia-400',
+    accentBg: 'bg-fuchsia-500',
+    accentBgSoft: 'bg-fuchsia-500/10',
+    accentBorder: 'border-fuchsia-500/50',
+    accentRing: 'focus:ring-fuchsia-500/60',
+    barFrom: 'from-fuchsia-500',
+    barTo: 'to-violet-400',
+    glow: 'shadow-[0_0_24px_-6px_rgba(217,70,239,0.45)]',
+    viewportGrid: 'bg-[#0d0714]',
+    chip: 'bg-fuchsia-500/10 text-fuchsia-200 border-fuchsia-500/30',
+  },
+};
+
+/* 설비 상태 정의 --------------------------------------------------------- */
+const STATUS = {
+  RUNNING: { label: '작업 중', dot: 'bg-emerald-400', text: 'text-emerald-300', ring: 'ring-emerald-400/40', pulse: true },
+  IDLE: { label: '대기', dot: 'bg-slate-400', text: 'text-slate-300', ring: 'ring-slate-400/30', pulse: false },
+  ERROR: { label: '오류', dot: 'bg-red-500', text: 'text-red-300', ring: 'ring-red-500/40', pulse: true },
+  MAINT: { label: '점검 중', dot: 'bg-amber-400', text: 'text-amber-300', ring: 'ring-amber-400/40', pulse: false },
+};
+
+/* ---------------------------------------------------------------------------
+ * 2. Mock Data  (실서비스에서는 WebSocket / REST 로 대체)
+ * ------------------------------------------------------------------------- */
+const PLANTS = [
+  { id: 'P1-A', name: '화성 1공장 · A라인 (조립)' },
+  { id: 'P1-B', name: '화성 1공장 · B라인 (도장)' },
+  { id: 'P2-A', name: '평택 2공장 · A라인 (프레스)' },
+];
+
+const INITIAL_JOBS = [
+  { id: 'WO-2409-001', name: '前 범퍼 조립 배치', qty: 120, eta: '14:20', state: 'RUNNING' },
+  { id: 'WO-2409-002', name: '도어 힌지 용접', qty: 80, eta: '15:05', state: 'IDLE' },
+  { id: 'WO-2409-003', name: '루프 패널 프레스', qty: 240, eta: '16:40', state: 'IDLE' },
+  { id: 'WO-2409-004', name: '샤시 볼트 체결 (재작업)', qty: 36, eta: '17:10', state: 'ERROR' },
+  { id: 'WO-2409-005', name: '검사 지그 세팅', qty: 12, eta: '18:00', state: 'IDLE' },
+];
+
+/* 3D 뷰포트 위에 뿌릴 더미 핫스팟 (실제로는 raycast pick 결과로 대체) */
+const ASSET_HOTSPOTS = [
+  {
+    id: 'RB-A-014',
+    name: '6축 다관절 로봇 #14',
+    sn: 'KR210-2021-88431',
+    maker: 'KUKA',
+    model: 'KR 210 R2700',
+    installedAt: '2021-03-11',
+    lastCheck: '2026-07-02',
+    nextCheck: '2026-10-02',
+    cycleSec: 42.7,
+    status: 'RUNNING',
+    pos: { top: '28%', left: '32%' },
+    history: [
+      { date: '2026-07-02', type: '정기점검', note: '감속기 그리스 교체' },
+      { date: '2026-04-18', type: '수리', note: 'J3축 엔코더 교체' },
+      { date: '2026-01-09', type: '정기점검', note: '이상 없음' },
+    ],
+  },
+  {
+    id: 'CV-A-003',
+    name: '메인 컨베이어 #3',
+    sn: 'CV-1200-2019-01187',
+    maker: '한독시스템',
+    model: 'HDC-1200L',
+    installedAt: '2019-08-27',
+    lastCheck: '2026-06-15',
+    nextCheck: '2026-09-15',
+    cycleSec: 11.2,
+    status: 'IDLE',
+    pos: { top: '58%', left: '54%' },
+    history: [
+      { date: '2026-06-15', type: '정기점검', note: '벨트 장력 재조정' },
+      { date: '2026-02-03', type: '수리', note: '구동 모터 베어링 교체' },
+    ],
+  },
+  {
+    id: 'PR-A-002',
+    name: '유압 프레스 #2',
+    sn: 'HP-800T-2020-00042',
+    maker: 'AIDA',
+    model: 'MSP-800',
+    installedAt: '2020-11-02',
+    lastCheck: '2026-05-28',
+    nextCheck: '2026-08-28',
+    cycleSec: 88.4,
+    status: 'ERROR',
+    pos: { top: '44%', left: '70%' },
+    history: [
+      { date: '2026-07-29', type: '알람', note: '유압 라인 압력 저하 (E-207)' },
+      { date: '2026-05-28', type: '정기점검', note: '실린더 씰 교체' },
+    ],
+  },
+];
+
+/* ---------------------------------------------------------------------------
+ * 3. 공용 프리미티브
+ * ------------------------------------------------------------------------- */
+const Panel = ({ theme, className = '', children }) => (
+  <section
+    className={`rounded-xl border ${theme.panelBorder} ${theme.panelBg} backdrop-blur-sm ${className}`}
+  >
+    {children}
+  </section>
+);
+
+const PanelTitle = ({ icon: Icon, title, right, theme }) => (
+  <header className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
+    <div className="flex items-center gap-2">
+      <Icon className={`w-4 h-4 ${theme.accentText}`} />
+      <h2 className="text-[13px] font-semibold tracking-tight text-slate-100">{title}</h2>
+    </div>
+    {right}
+  </header>
+);
+
+const StatusLamp = ({ state, size = 'sm', showLabel = true }) => {
+  const s = STATUS[state] ?? STATUS.IDLE;
+  const dot = size === 'lg' ? 'w-3.5 h-3.5' : 'w-2 h-2';
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`relative flex ${dot}`}>
+        {s.pulse && (
+          <span className={`absolute inline-flex w-full h-full rounded-full opacity-60 animate-ping ${s.dot}`} />
+        )}
+        <span className={`relative inline-flex w-full h-full rounded-full ring-2 ${s.ring} ${s.dot}`} />
+      </span>
+      {showLabel && <span className={`text-xs font-medium ${s.text}`}>{s.label}</span>}
+    </span>
+  );
+};
+
+const GhostButton = ({ icon: Icon, children, onClick, theme, danger = false, className = '' }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`inline-flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5
+      text-[11px] font-medium transition-colors focus:outline-none focus:ring-2 ${theme.accentRing}
+      ${danger
+        ? 'border-red-500/40 text-red-300 hover:bg-red-500/10'
+        : 'border-white/10 text-slate-300 hover:bg-white/5 hover:text-white'} ${className}`}
+  >
+    {Icon && <Icon className="w-3.5 h-3.5" />}
+    {children}
+  </button>
+);
+
+/* ---------------------------------------------------------------------------
+ * 4. Top GNB
+ * ------------------------------------------------------------------------- */
+const TopGnb = ({ theme, mode, onModeChange, plant, onPlantChange, eStopEngaged, onEStop }) => (
+  <header
+    className={`h-14 shrink-0 flex items-center justify-between gap-4 px-4 border-b ${theme.panelBorder} ${theme.headerBg} z-30`}
+  >
+    {/* --- 좌: 로고 + 공장/라인 선택 --- */}
+    <div className="flex items-center gap-4 min-w-0">
+      <div className="flex items-center gap-2 shrink-0">
+        <div className={`grid place-items-center w-8 h-8 rounded-lg ${theme.accentBg}`}>
+          <Boxes className="w-[18px] h-[18px] text-white" />
+        </div>
+        <div className="leading-none">
+          <p className="text-[13px] font-bold tracking-tight text-white">TWIN<span className={theme.accentText}>OPS</span></p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Digital Twin Control</p>
+        </div>
+      </div>
+
+      <div className="relative">
+        <Factory className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+        <select
+          value={plant}
+          onChange={(e) => onPlantChange(e.target.value)}
+          className={`appearance-none h-9 pl-8 pr-8 rounded-lg border ${theme.panelBorder} bg-black/30
+            text-xs text-slate-200 focus:outline-none focus:ring-2 ${theme.accentRing} cursor-pointer`}
+        >
+          {PLANTS.map((p) => (
+            <option key={p.id} value={p.id} className="bg-slate-900">{p.name}</option>
+          ))}
+        </select>
+        <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+      </div>
+    </div>
+
+    {/* --- 중앙: 운전 / 시뮬레이션 토글 --- */}
+    <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} bg-black/40`}>
+      {/* 슬라이딩 인디케이터 */}
+      <span
+        className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full transition-all duration-300 ease-out
+          ${theme.accentBg} ${mode === 'operation' ? 'left-1' : 'left-[calc(50%+3px)]'}`}
+      />
+      {[
+        { key: 'operation', label: '운전 모드', icon: Activity },
+        { key: 'simulation', label: '시뮬레이션 모드', icon: Cpu },
+      ].map(({ key, label, icon: Icon }) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onModeChange(key)}
+          className={`relative z-10 flex items-center gap-1.5 px-4 h-7 rounded-full text-[11px] font-semibold
+            transition-colors ${mode === key ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <Icon className="w-3.5 h-3.5" />
+          {label}
+        </button>
+      ))}
+    </div>
+
+    {/* --- 우: E-STOP + 프로필 --- */}
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        onClick={onEStop}
+        className={`group flex items-center gap-2 h-10 px-4 rounded-lg font-extrabold text-[13px] tracking-tight
+          text-white border-b-4 active:border-b-0 active:translate-y-[3px] transition-all
+          focus:outline-none focus:ring-4 focus:ring-red-500/40
+          ${eStopEngaged
+            ? 'bg-red-700 border-red-900 animate-pulse'
+            : 'bg-red-600 hover:bg-red-500 border-red-800 shadow-[0_0_20px_-4px_rgba(239,68,68,0.7)]'}`}
+      >
+        <AlertOctagon className="w-5 h-5" />
+        {eStopEngaged ? 'E-STOP 작동 중' : '비상 정지'}
+      </button>
+
+      <div className="h-6 w-px bg-white/10" />
+
+      <button type="button" className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg hover:bg-white/5">
+        <span className="grid place-items-center w-7 h-7 rounded-full bg-slate-700 text-slate-200">
+          <User className="w-4 h-4" />
+        </span>
+        <span className="text-left leading-none hidden lg:block">
+          <span className="block text-[11px] font-semibold text-slate-200">김현장</span>
+          <span className="block text-[10px] text-slate-500 mt-0.5">라인 관리자</span>
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+      </button>
+    </div>
+  </header>
+);
+
+/* ---------------------------------------------------------------------------
+ * 5. 좌측 패널 - 전체 라인 현황 대시보드
+ * ------------------------------------------------------------------------- */
+const LeftDashboardPanel = ({ theme, mode, jobs, onRemoveJob, speed, onSpeedChange }) => {
+  const progress = 68; // 더미: 라인 전체 진행률
+  const stages = [
+    { name: '투입', value: 100 },
+    { name: '가공', value: 82 },
+    { name: '조립', value: 61 },
+    { name: '검사', value: 34 },
+  ];
+
+  return (
+    <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
+      {/* 5-1. 라인 전체 진행률 ------------------------------------------- */}
+      <Panel theme={theme} className={theme.glow}>
+        <PanelTitle icon={Gauge} title="생산 라인 진행률" theme={theme}
+          right={<span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>DAY SHIFT</span>} />
+        <div className="p-3 space-y-3">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-3xl font-bold tabular-nums text-white leading-none">
+                {progress}<span className="text-base text-slate-400 ml-0.5">%</span>
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1">목표 1,200 EA · 실적 816 EA</p>
+            </div>
+            <StatusLamp state="RUNNING" />
+          </div>
+
+          <div className="h-2.5 rounded-full bg-black/40 overflow-hidden">
+            <div
+              className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo} transition-all duration-700`}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+
+          <ul className="space-y-2 pt-1">
+            {stages.map((s) => (
+              <li key={s.name} className="flex items-center gap-2">
+                <span className="w-8 text-[11px] text-slate-400 shrink-0">{s.name}</span>
+                <span className="flex-1 h-1.5 rounded-full bg-black/40 overflow-hidden">
+                  <span
+                    className={`block h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo} transition-all duration-700`}
+                    style={{ width: `${s.value}%` }}
+                  />
+                </span>
+                <span className="w-9 text-right text-[11px] tabular-nums text-slate-300">{s.value}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Panel>
+
+      {/* 5-2. 작업 대기열 ------------------------------------------------ */}
+      <Panel theme={theme} className="flex-1 min-h-[260px] flex flex-col">
+        <PanelTitle icon={Layers} title="작업 대기열" theme={theme}
+          right={<span className="text-[10px] text-slate-500 tabular-nums">{jobs.length} JOBS</span>} />
+
+        <ul className="flex-1 overflow-y-auto p-2 space-y-1.5">
+          {jobs.map((job, idx) => (
+            <li
+              key={job.id}
+              className={`group flex items-center gap-2 rounded-lg border border-white/5 bg-black/20 px-2 py-2
+                hover:border-white/15 hover:bg-white/5 transition-colors cursor-grab`}
+            >
+              <GripVertical className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-400 shrink-0" />
+              <span className="w-5 text-[10px] tabular-nums text-slate-600">{String(idx + 1).padStart(2, '0')}</span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-medium text-slate-200">{job.name}</p>
+                <p className="text-[10px] text-slate-500 tabular-nums">
+                  {job.id} · {job.qty} EA · ETA {job.eta}
+                </p>
+              </div>
+              <StatusLamp state={job.state} showLabel={false} />
+              <button
+                type="button"
+                onClick={() => onRemoveJob(job.id)}
+                className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition"
+                aria-label={`${job.name} 삭제`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <footer className="grid grid-cols-3 gap-1.5 p-2 border-t border-white/5">
+          <GhostButton icon={Plus} theme={theme}>작업 추가</GhostButton>
+          <GhostButton icon={Upload} theme={theme}>엑셀 업로드</GhostButton>
+          <GhostButton icon={X} theme={theme} danger>취소</GhostButton>
+        </footer>
+      </Panel>
+
+      {/* 5-3. 시뮬레이션 배속 -------------------------------------------- */}
+      <Panel theme={theme}>
+        <PanelTitle icon={Settings2} title="시뮬레이션 배속" theme={theme}
+          right={<span className={`text-xs font-bold tabular-nums ${theme.accentText}`}>{speed.toFixed(1)}x</span>} />
+        <div className="p-3 pt-2.5">
+          <input
+            type="range"
+            min={1}
+            max={4}
+            step={0.5}
+            value={speed}
+            disabled={mode !== 'simulation'}
+            onChange={(e) => onSpeedChange(Number(e.target.value))}
+            className={`w-full h-1.5 rounded-full appearance-none cursor-pointer bg-black/50 accent-fuchsia-500
+              disabled:opacity-40 disabled:cursor-not-allowed
+              ${mode === 'simulation' ? 'accent-fuchsia-500' : 'accent-sky-500'}`}
+          />
+          <div className="flex justify-between mt-1.5 text-[10px] tabular-nums text-slate-500">
+            {[1, 2, 3, 4].map((v) => <span key={v}>{v}x</span>)}
+          </div>
+          {mode !== 'simulation' && (
+            <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+              실시간 운전 중에는 배속 조절이 잠깁니다. 시뮬레이션 모드로 전환하세요.
+            </p>
+          )}
+        </div>
+      </Panel>
+    </aside>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * 6. 중앙 - 3D 뷰포트 (+ CCTV PIP)
+ *    canvasRef 를 useTwinRenderer(canvasRef) 로 넘겨 GLB / GIS 를 렌더링합니다.
+ * ------------------------------------------------------------------------- */
+const TwinViewport = ({ theme, mode, onSelectAsset, selectedId }) => {
+  const canvasRef = useRef(null);
+  const [cctvOpen, setCctvOpen] = useState(true);
+
+  return (
+    <main className="relative flex-1 min-w-0 h-full p-3 pl-0">
+      <div
+        className={`relative w-full h-full rounded-xl overflow-hidden border ${theme.panelBorder} ${theme.viewportGrid} ${theme.glow}`}
+      >
+        {/* ===== 3D RENDER TARGET ===== */}
+        {/* Three.js: new WebGLRenderer({ canvas: canvasRef.current })                */}
+        {/* Cesium  : new Cesium.Viewer(containerRef.current) → canvas 대신 div 사용   */}
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
+
+        {/* 렌더러 연결 전 placeholder 그리드 (연동 후 제거) */}
+        <div
+          className="absolute inset-0 pointer-events-none opacity-[0.18]"
+          style={{
+            backgroundImage:
+              'linear-gradient(to right, rgba(148,163,184,.5) 1px, transparent 1px),' +
+              'linear-gradient(to bottom, rgba(148,163,184,.5) 1px, transparent 1px)',
+            backgroundSize: '48px 48px',
+            maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 78%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 78%)',
+          }}
+        />
+
+        <div className="absolute inset-0 grid place-items-center pointer-events-none">
+          <div className="text-center select-none">
+            <Move3d className={`w-10 h-10 mx-auto mb-2 ${theme.accentText} opacity-50`} />
+            <p className="text-sm font-semibold text-slate-400">3D VIEWPORT</p>
+            <p className="text-[11px] text-slate-600 mt-1">GLB Asset / GIS Layer mount point</p>
+          </div>
+        </div>
+
+        {/* --- 좌상단 상태 HUD --- */}
+        <div className="absolute top-3 left-3 flex items-center gap-2">
+          <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border ${theme.chip}`}>
+            {mode === 'simulation' ? 'SIMULATION' : 'LIVE'}
+          </span>
+          <span className="px-2.5 py-1 rounded-md text-[10px] tabular-nums text-slate-400 bg-black/50 border border-white/10">
+            60 FPS · 128k tri
+          </span>
+        </div>
+
+        {/* --- 우상단 뷰 컨트롤 --- */}
+        <div className="absolute top-3 right-3 flex flex-col gap-1.5">
+          {[Move3d, Layers, Camera, RotateCcw, Maximize2].map((Icon, i) => (
+            <button
+              key={i}
+              type="button"
+              className="grid place-items-center w-8 h-8 rounded-md bg-black/50 border border-white/10
+                text-slate-300 hover:text-white hover:bg-white/10 backdrop-blur-sm transition"
+            >
+              <Icon className="w-4 h-4" />
+            </button>
+          ))}
+        </div>
+
+        {/* --- 더미 설비 핫스팟 (실제로는 raycaster pick 이벤트로 대체) --- */}
+        {ASSET_HOTSPOTS.map((asset) => {
+          const s = STATUS[asset.status];
+          const active = selectedId === asset.id;
+          return (
+            <button
+              key={asset.id}
+              type="button"
+              onClick={() => onSelectAsset(asset)}
+              style={{ top: asset.pos.top, left: asset.pos.left }}
+              className="absolute -translate-x-1/2 -translate-y-1/2 group"
+            >
+              <span className="relative flex w-4 h-4">
+                <span className={`absolute inline-flex w-full h-full rounded-full opacity-50 animate-ping ${s.dot}`} />
+                <span
+                  className={`relative inline-flex w-full h-full rounded-full ring-4 ${s.dot}
+                    ${active ? 'ring-white/60 scale-125' : 'ring-black/40'} transition-transform`}
+                />
+              </span>
+              <span
+                className={`absolute left-6 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border px-2 py-1
+                  text-[10px] font-medium backdrop-blur-sm transition-opacity
+                  ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+                  ${theme.panelBorder} bg-black/70 text-slate-200`}
+              >
+                {asset.name} · {s.label}
+              </span>
+            </button>
+          );
+        })}
+
+        {/* --- 하단 CCTV PIP 오버레이 --- */}
+        <div className="absolute bottom-3 left-3 right-3 flex justify-start pointer-events-none">
+          <div
+            className={`pointer-events-auto rounded-lg border ${theme.panelBorder} bg-black/70 backdrop-blur-md
+              ${theme.glow} transition-all duration-300`}
+          >
+            <header className="flex items-center justify-between px-2.5 py-1.5 border-b border-white/5">
+              <div className="flex items-center gap-1.5">
+                <Video className={`w-3.5 h-3.5 ${theme.accentText}`} />
+                <span className="text-[11px] font-semibold text-slate-200">CCTV 모니터링</span>
+                <span className="ml-1 flex items-center gap-1 text-[9px] text-red-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> REC
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCctvOpen((v) => !v)}
+                className="text-slate-400 hover:text-white text-[10px] px-1"
+              >
+                {cctvOpen ? '접기' : '펼치기'}
+              </button>
+            </header>
+
+            {cctvOpen && (
+              <div className="flex gap-2 p-2">
+                {[
+                  { id: 'CAM-01', label: 'A라인 · 조립 셀 상부' },
+                  { id: 'CAM-04', label: 'A라인 · 프레스 정면' },
+                ].map((cam) => (
+                  <figure
+                    key={cam.id}
+                    className="relative w-[184px] aspect-video rounded-md overflow-hidden border border-white/10 bg-slate-950 group"
+                  >
+                    {/* <video> 또는 WebRTC / HLS player 삽입 지점 */}
+                    <div className="absolute inset-0 grid place-items-center bg-[repeating-linear-gradient(45deg,#0f172a_0px,#0f172a_8px,#111827_8px,#111827_16px)]">
+                      <Camera className="w-5 h-5 text-slate-600" />
+                    </div>
+                    <figcaption className="absolute inset-x-0 bottom-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-black/90 to-transparent">
+                      <span className="text-[9px] font-medium text-slate-200">{cam.label}</span>
+                      <span className="text-[9px] tabular-nums text-slate-400">{cam.id}</span>
+                    </figcaption>
+                    <button
+                      type="button"
+                      className="absolute top-1 right-1 grid place-items-center w-5 h-5 rounded bg-black/60
+                        text-slate-300 opacity-0 group-hover:opacity-100 transition"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                    </button>
+                  </figure>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * 7. 우측 사이드바 - 단일 설비 상세 속성창
+ *    open 여부에 따라 translate-x 로 slide in/out
+ * ------------------------------------------------------------------------- */
+const AssetDetailSidebar = ({ theme, mode, asset, onClose }) => {
+  const [simCount, setSimCount] = useState(100);
+  const [simRunning, setSimRunning] = useState(false);
+  const [memo, setMemo] = useState('');
+
+  // 더미 예측 완료 시간: 사이클타임 × 횟수
+  const eta = useMemo(() => {
+    if (!asset) return '--:--';
+    const totalSec = asset.cycleSec * simCount;
+    const done = new Date(Date.now() + totalSec * 1000);
+    return `${String(done.getHours()).padStart(2, '0')}:${String(done.getMinutes()).padStart(2, '0')}`;
+  }, [asset, simCount]);
+
+  const open = Boolean(asset);
+
+  return (
+    <aside
+      className={`absolute top-0 right-0 h-full w-[360px] z-20 transition-transform duration-300 ease-out
+        ${open ? 'translate-x-0' : 'translate-x-full'}`}
+      aria-hidden={!open}
+    >
+      <div className={`h-full flex flex-col border-l ${theme.panelBorder} ${theme.headerBg} shadow-2xl shadow-black/60`}>
+        {/* --- 헤더 --- */}
+        <header className={`shrink-0 px-4 py-3 border-b ${theme.panelBorder} ${theme.accentBgSoft}`}>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className={`text-[10px] font-semibold tracking-widest ${theme.accentText}`}>EQUIPMENT DETAIL</p>
+              <h2 className="mt-1 text-[15px] font-bold text-white truncate">{asset?.name ?? '-'}</h2>
+              <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">{asset?.id}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 grid place-items-center w-7 h-7 rounded-md text-slate-400 hover:text-white hover:bg-white/10"
+              aria-label="닫기"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* 상태등 */}
+          <div className="mt-3 flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2">
+            <span className="text-[11px] text-slate-400">현재 상태</span>
+            <StatusLamp state={asset?.status ?? 'IDLE'} size="lg" />
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+          {/* --- 기본 정보 --- */}
+          <Panel theme={theme}>
+            <PanelTitle icon={Cpu} title="기본 정보" theme={theme} />
+            <dl className="p-3 grid grid-cols-3 gap-y-2.5 text-[11px]">
+              {[
+                ['설비명', asset?.name],
+                ['S/N', asset?.sn],
+                ['제조사', asset?.maker],
+                ['모델', asset?.model],
+                ['설치일', asset?.installedAt],
+                ['Cycle Time', asset ? `${asset.cycleSec.toFixed(1)} sec` : '-'],
+              ].map(([k, v]) => (
+                <React.Fragment key={k}>
+                  <dt className="col-span-1 text-slate-500">{k}</dt>
+                  <dd className="col-span-2 text-slate-200 tabular-nums truncate">{v ?? '-'}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
+          </Panel>
+
+          {/* --- 점검 이력 --- */}
+          <Panel theme={theme}>
+            <PanelTitle icon={Wrench} title="점검 이력" theme={theme}
+              right={<span className="text-[10px] text-slate-500">차기 {asset?.nextCheck ?? '-'}</span>} />
+            <ol className="p-3 space-y-2.5">
+              {(asset?.history ?? []).map((h, i) => (
+                <li key={i} className="relative pl-4">
+                  <span className={`absolute left-0 top-1.5 w-1.5 h-1.5 rounded-full ${i === 0 ? theme.accentBg : 'bg-slate-600'}`} />
+                  {i < (asset?.history.length ?? 0) - 1 && (
+                    <span className="absolute left-[2.5px] top-3.5 bottom-[-10px] w-px bg-white/10" />
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] tabular-nums text-slate-300">{h.date}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] border ${theme.chip}`}>{h.type}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{h.note}</p>
+                </li>
+              ))}
+            </ol>
+          </Panel>
+
+          {/* --- 시뮬레이션 제어 --- */}
+          <Panel theme={theme} className={mode === 'simulation' ? theme.glow : ''}>
+            <PanelTitle icon={Activity} title="시뮬레이션 제어" theme={theme}
+              right={<span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>
+                {mode === 'simulation' ? 'READY' : 'LIVE 잠금'}
+              </span>} />
+            <div className="p-3 space-y-3">
+              <label className="block">
+                <span className="block text-[11px] text-slate-400 mb-1">시뮬레이션 횟수 (cycle)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={9999}
+                  value={simCount}
+                  onChange={(e) => setSimCount(Math.max(1, Number(e.target.value) || 1))}
+                  disabled={mode !== 'simulation'}
+                  className={`w-full h-9 px-3 rounded-lg border ${theme.panelBorder} bg-black/40 text-sm tabular-nums
+                    text-slate-100 focus:outline-none focus:ring-2 ${theme.accentRing}
+                    disabled:opacity-40 disabled:cursor-not-allowed`}
+                />
+              </label>
+
+              <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/30 px-3 py-2">
+                <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  <Clock className="w-3.5 h-3.5" /> 예측 완료 시간
+                </span>
+                <span className={`text-sm font-bold tabular-nums ${theme.accentText}`}>{eta}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSimRunning(true)}
+                  disabled={mode !== 'simulation' || simRunning}
+                  className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
+                    text-white transition ${theme.accentBg} hover:opacity-90
+                    disabled:opacity-30 disabled:cursor-not-allowed`}
+                >
+                  <Play className="w-4 h-4" /> 시작
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSimRunning(false)}
+                  disabled={!simRunning}
+                  className="inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
+                    text-slate-200 border border-white/15 hover:bg-white/5 transition
+                    disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <Pause className="w-4 h-4" /> 중지
+                </button>
+              </div>
+            </div>
+          </Panel>
+
+          {/* --- 현장 작업자 메모 --- */}
+          <Panel theme={theme}>
+            <PanelTitle icon={StickyNote} title="작업자 메모" theme={theme} />
+            <div className="p-3 space-y-2">
+              <textarea
+                rows={4}
+                value={memo}
+                onChange={(e) => setMemo(e.target.value)}
+                placeholder="현장 특이사항, 인수인계 내용을 입력하세요."
+                className={`w-full rounded-lg border ${theme.panelBorder} bg-black/40 p-2.5 text-[12px] leading-relaxed
+                  text-slate-100 placeholder:text-slate-600 resize-none focus:outline-none focus:ring-2 ${theme.accentRing}`}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-600 tabular-nums">{memo.length} / 500</span>
+                <GhostButton icon={Save} theme={theme}>메모 저장</GhostButton>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+/* ---------------------------------------------------------------------------
+ * 8. E-STOP 확인 모달
+ * ------------------------------------------------------------------------- */
+const EStopModal = ({ engaged, onConfirm, onCancel }) => (
+  <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 backdrop-blur-sm">
+    <div className="w-[380px] rounded-2xl border border-red-500/40 bg-slate-900 p-6 shadow-2xl">
+      <div className="flex items-center gap-3">
+        <span className="grid place-items-center w-11 h-11 rounded-xl bg-red-500/15 text-red-400">
+          <AlertOctagon className="w-6 h-6" />
+        </span>
+        <div>
+          <h3 className="text-base font-bold text-white">
+            {engaged ? '비상 정지 해제' : '비상 정지 실행'}
+          </h3>
+          <p className="text-[11px] text-slate-400 mt-0.5">화성 1공장 · A라인 (조립)</p>
+        </div>
+      </div>
+      <p className="mt-4 text-[12px] leading-relaxed text-slate-300">
+        {engaged
+          ? '라인 전 설비의 인터록을 해제하고 운전 대기 상태로 복귀합니다. 현장 안전이 확보되었는지 확인하세요.'
+          : '해당 라인의 모든 설비가 즉시 정지되며, 진행 중인 작업 지시는 보류됩니다. 계속하시겠습니까?'}
+      </p>
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-10 rounded-lg border border-white/15 text-[12px] font-semibold text-slate-200 hover:bg-white/5"
+        >
+          취소
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="h-10 rounded-lg bg-red-600 hover:bg-red-500 text-[12px] font-bold text-white"
+        >
+          {engaged ? '해제 확인' : '즉시 정지'}
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+/* ---------------------------------------------------------------------------
+ * 9. Root Layout
+ * ------------------------------------------------------------------------- */
+function DigitalTwinDashboard() {
+  const [mode, setMode] = useState('operation');       // 'operation' | 'simulation'
+  const [plant, setPlant] = useState(PLANTS[0].id);
+  const [jobs, setJobs] = useState(INITIAL_JOBS);
+  const [speed, setSpeed] = useState(1);
+  const [selectedAsset, setSelectedAsset] = useState(null); // 3D pick 결과 더미
+  const [eStopEngaged, setEStopEngaged] = useState(false);
+  const [eStopModal, setEStopModal] = useState(false);
+
+  const theme = THEME[mode];
+
+  const handleModeChange = (next) => {
+    setMode(next);
+    if (next === 'operation') setSpeed(1); // 실시간 운전은 항상 1x
+  };
+
+  return (
+    <div
+      className={`w-screen h-screen overflow-hidden flex flex-col font-sans text-slate-200
+        bg-slate-950 selection:bg-fuchsia-500/30 transition-colors duration-500`}
+    >
+      {/* 시뮬레이션 모드 / E-STOP 상태를 알리는 전역 프레임 */}
+      <div
+        className={`pointer-events-none fixed inset-0 z-40 ring-2 ring-inset transition-all duration-500
+          ${eStopEngaged ? 'ring-red-500/70' : mode === 'simulation' ? 'ring-fuchsia-500/40' : 'ring-transparent'}`}
+      />
+
+      <TopGnb
+        theme={theme}
+        mode={mode}
+        onModeChange={handleModeChange}
+        plant={plant}
+        onPlantChange={setPlant}
+        eStopEngaged={eStopEngaged}
+        onEStop={() => setEStopModal(true)}
+      />
+
+      {/* 본문: 좌측 패널 | 3D 뷰포트 | (오버레이) 우측 상세 사이드바 */}
+      <div className="relative flex-1 min-h-0 flex">
+        <LeftDashboardPanel
+          theme={theme}
+          mode={mode}
+          jobs={jobs}
+          onRemoveJob={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
+          speed={speed}
+          onSpeedChange={setSpeed}
+        />
+
+        <TwinViewport
+          theme={theme}
+          mode={mode}
+          selectedId={selectedAsset?.id}
+          onSelectAsset={(asset) =>
+            setSelectedAsset((prev) => (prev?.id === asset.id ? null : asset))
+          }
+        />
+
+        <AssetDetailSidebar
+          theme={theme}
+          mode={mode}
+          asset={selectedAsset}
+          onClose={() => setSelectedAsset(null)}
+        />
+      </div>
+
+      {/* 하단 스테이터스 바 */}
+      <footer
+        className={`h-7 shrink-0 flex items-center justify-between px-4 border-t ${theme.panelBorder}
+          ${theme.headerBg} text-[10px] tabular-nums text-slate-500`}
+      >
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> OPC-UA 연결됨
+          </span>
+          <span>Latency 24ms</span>
+          <span>Sync 2026-07-30 13:42:07</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <span>{mode === 'simulation' ? `SIM ${speed.toFixed(1)}x` : 'REALTIME 1.0x'}</span>
+          <span>{PLANTS.find((p) => p.id === plant)?.name}</span>
+        </div>
+      </footer>
+
+      {eStopModal && (
+        <EStopModal
+          engaged={eStopEngaged}
+          onCancel={() => setEStopModal(false)}
+          onConfirm={() => {
+            setEStopEngaged((v) => !v);
+            setEStopModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---- 브라우저 미리보기용 부트스트랩 (Vite 프로젝트에서는 불필요) ---- */
+import { createRoot } from 'react-dom/client';
+document.getElementById('boot')?.remove();
+createRoot(document.getElementById('root')).render(<DigitalTwinDashboard />);
+</script>
+</body>
+</html>
