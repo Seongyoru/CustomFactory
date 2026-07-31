@@ -36,6 +36,35 @@ body {
   background: transparent;
 }
 
+/* -----------------------------------------------------------------------
+ * 설비 오류 알람 비네팅
+ *  화면 가장자리를 붉게 물들여 깜빡인다. 경광등처럼 시야 주변에서 감지되도록
+ *  중앙(45%)까지는 완전 투명하게 두어 3D 화면과 판독을 방해하지 않는다.
+ *  알람을 확인(설비로 이동)하면 클래스가 빠지면서 즉시 멈춘다.
+ * --------------------------------------------------------------------- */
+@keyframes alarm-vignette {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.alarm-vignette {
+  background: radial-gradient(ellipse at center, rgba(239, 68, 68, 0) 42%, rgba(239, 68, 68, 0.62) 100%);
+  animation: alarm-vignette 1.1s ease-in-out infinite;
+}
+
+/* 접근성: 모션을 줄이도록 설정한 사용자에게는 깜빡임 대신 고정 표시 */
+@media (prefers-reduced-motion: reduce) {
+  .alarm-vignette {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
 /* number input 의 기본 스피너 제거 (시뮬레이션 횟수 입력용) */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {

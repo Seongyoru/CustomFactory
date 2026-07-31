@@ -20,7 +20,7 @@
  * =============================================================================
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -29,6 +29,7 @@ import {
   ChevronDown,
   Clock,
   Cpu,
+  Crosshair,
   Factory,
   FileDown,
   Gauge,
@@ -48,14 +49,26 @@ import {
   Sun,
   Trash2,
   Upload,
+  Siren,
   User,
   Video,
+  Workflow,
   Wrench,
   X,
 } from 'lucide-react';
 
 import FactoryScene, { CAMERA_HOME } from './scene/FactoryScene.jsx';
-import { FACTORY_ASSETS, SELECTABLE_ASSETS, STATUS, findAsset } from './data/factoryAssets.js';
+import {
+  FACTORY_ASSETS,
+  FAULT_SCENARIOS,
+  PRODUCTION_LINES,
+  PROCESS_CYCLE_SEC,
+  PROCESS_PHASES,
+  SELECTABLE_ASSETS,
+  STATUS,
+  findAsset,
+  findLine,
+} from './data/factoryAssets.js';
 import { getTheme } from './theme.js';
 import {
   OPTIONAL_COLUMNS,
@@ -67,11 +80,18 @@ import {
 /* ---------------------------------------------------------------------------
  * 1. Mock Data
  * ------------------------------------------------------------------------- */
-const PLANTS = [
-  { id: 'L1', name: 'DM뷰 - Line_1' },
-  { id: 'L2', name: 'DM뷰 - Line_2' },
-  { id: 'L3', name: 'DM뷰 - Line_3' },
-];
+/* 라인 목록은 3D 배치와 같은 소스를 쓴다 — factoryAssets.PRODUCTION_LINES */
+const PLANTS = PRODUCTION_LINES;
+
+/**
+ * 작업지시 번호 발번.
+ *  대기열 '길이'로 번호를 만들면 작업을 취소한 뒤 추가할 때 이미 쓴 번호가 다시
+ *  나온다(취소로 5→4건이 된 뒤 추가하면 또 005). React key 가 겹치고 목록이
+ *  깨지므로, 지금까지 쓴 가장 큰 번호에서 이어 붙인다.
+ */
+const makeJobId = (seq) => `WO-2607-${String(seq).padStart(3, '0')}`;
+const nextJobSeq = (jobs) =>
+  jobs.reduce((max, j) => Math.max(max, Number(String(j.id).split('-').pop()) || 0), 0) + 1;
 
 /* 작업 카탈로그 — '작업 추가' 팝업에서 선택하거나 새로 등록한다 */
 const INITIAL_JOB_TEMPLATES = [
@@ -82,13 +102,60 @@ const INITIAL_JOB_TEMPLATES = [
   { id: 'TPL-05', name: '공(空)실린더 회수/세척', qty: 60, totalSec: 600 },
 ];
 
-const INITIAL_JOBS = [
-  { id: 'WO-2607-001', name: 'HPG 원자재 개포장', qty: 120, totalSec: 900, state: 'RUNNING' },
-  { id: 'WO-2607-002', name: 'HPG 원자재 이송', qty: 80, totalSec: 720, state: 'IDLE' },
-  { id: 'WO-2607-003', name: '실린더 충전 (CART-01)', qty: 240, totalSec: 1500, state: 'IDLE' },
-  { id: 'WO-2607-004', name: '충전 후 계량/검사', qty: 36, totalSec: 480, state: 'ERROR' },
-  { id: 'WO-2607-005', name: '공(空)실린더 회수/세척', qty: 60, totalSec: 600, state: 'IDLE' },
+const INITIAL_JOB_SPECS = [
+  { name: 'HPG 원자재 개포장', qty: 120, totalSec: 900, state: 'RUNNING' },
+  { name: 'HPG 원자재 이송', qty: 80, totalSec: 720, state: 'IDLE' },
+  { name: '실린더 충전 (CART-01)', qty: 240, totalSec: 1500, state: 'IDLE' },
+  { name: '충전 후 계량/검사', qty: 36, totalSec: 480, state: 'ERROR' },
+  { name: '공(空)실린더 회수/세척', qty: 60, totalSec: 600, state: 'IDLE' },
 ];
+
+/**
+ * 라인마다 자기 대기열을 갖는다. 라인은 같은 설비 구성이라 작업 종류도 같지만,
+ * 지시 번호는 라인끼리 겹치지 않게 100번대씩 띄운다 (1호기 001~, 2호기 101~).
+ */
+const makeInitialJobs = (lineIndex) =>
+  INITIAL_JOB_SPECS.map((spec, i) => ({ id: makeJobId(lineIndex * 100 + i + 1), ...spec }));
+
+const INITIAL_JOBS_BY_LINE = Object.fromEntries(
+  PLANTS.map((line, i) => [line.id, makeInitialJobs(i)])
+);
+
+/** 설비 배치도 라인별로 따로 관리한다 — 한쪽에서 옮겨도 다른 라인은 그대로다 */
+const INITIAL_OFFSETS_BY_LINE = Object.fromEntries(
+  PLANTS.map((line) => [
+    line.id,
+    Object.fromEntries(FACTORY_ASSETS.map((a) => [a.id, [...a.offset]])),
+  ])
+);
+
+/**
+ * 시뮬레이션 배속 단계.
+ *  슬라이더가 값이 아니라 '인덱스'를 다루기 때문에 간격이 불균등해도(0.25 → 1 → 4)
+ *  눈금이 균등하게 찍힌다. 저속 구간을 촘촘히 두어 공정 동작을 뜯어볼 수 있게 했다.
+ */
+const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 2, 3, 4];
+
+/**
+ * 공정 시퀀스 HUD 가 4Hz 로 갱신되는데, 그때마다 3D 트리까지 재조정되면 낭비다.
+ * 씬에 넘기는 props 는 모두 참조가 안정적이라 memo 로 그 갱신을 끊어낸다.
+ */
+const Scene = React.memo(FactoryScene);
+
+/**
+ * 생산 라인 4단계.
+ *  대기열의 작업을 이름으로 단계에 배정해 단계별 진행률을 낸다.
+ *  판정 순서가 표시 순서와 다른 이유: "충전 후 계량/검사" 처럼 두 단어가 겹치는
+ *  작업이 있어서, 더 좁은 규칙(검사)을 넓은 규칙(충전)보다 먼저 본다.
+ */
+const STAGE_ORDER = ['개포장', '이송', '충전', '검사'];
+const stageOf = (name = '') => {
+  if (/개포장|절단/.test(name)) return '개포장';
+  if (/검사|계량/.test(name)) return '검사';
+  if (/충전/.test(name)) return '충전';
+  if (/이송|회수|세척/.test(name)) return '이송';
+  return null; // 어느 단계에도 속하지 않는 작업은 집계에서 뺀다
+};
 
 const CCTV_FEEDS = [
   { id: 'CAM-01', label: 'Line_1 · 절단기 상부', src: '/cctv/cam-01.mp4' },
@@ -107,15 +174,44 @@ function useWallClock() {
   return now;
 }
 
-/** 운전 모드는 1초에 1초, 시뮬레이션은 1초에 speed초 진행. 표준시간 도달 시 순환. */
-function useJobTimer({ totalSec, speed, paused }) {
-  const [elapsed, setElapsed] = useState(451);
+/**
+ * 라인별 작업 경과시간.
+ *  운전 모드는 1초에 1초, 시뮬레이션은 1초에 speed초 진행하고 표준시간에서 순환한다.
+ *  라인마다 자기 대기열의 선두 작업을 돌리므로 경과시간도 라인별로 따로 흐른다.
+ *  보고 있지 않은 라인도 계속 진행한다 — 라인을 옮겨 다녀도 시간이 멈추지 않는다.
+ */
+function useLineJobTimers({ jobsByLine, speed, pausedByLine }) {
+  const [elapsedByLine, setElapsedByLine] = useState(() =>
+    Object.fromEntries(PLANTS.map((l) => [l.id, 451]))
+  );
+
+  /* 인터벌 콜백이 항상 최신 대기열·정지상태를 보게 한다
+     (deps 에 넣으면 작업을 고치거나 정지할 때마다 타이머가 끊긴다) */
+  const jobsRef = useRef(jobsByLine);
+  jobsRef.current = jobsByLine;
+  const pausedRef = useRef(pausedByLine);
+  pausedRef.current = pausedByLine;
+
   useEffect(() => {
-    if (paused) return undefined;
-    const id = setInterval(() => setElapsed((e) => (e + speed) % totalSec), 1000);
+    const id = setInterval(() => {
+      setElapsedByLine((prev) => {
+        const next = {};
+        PLANTS.forEach((line) => {
+          /* 비상 정지된 라인은 경과시간을 그대로 붙잡아 둔다 */
+          if (pausedRef.current[line.id]) {
+            next[line.id] = prev[line.id] ?? 0;
+            return;
+          }
+          const totalSec = jobsRef.current[line.id]?.[0]?.totalSec ?? 900;
+          next[line.id] = ((prev[line.id] ?? 0) + speed) % totalSec;
+        });
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(id);
-  }, [speed, paused, totalSec]);
-  return elapsed;
+  }, [speed]);
+
+  return elapsedByLine;
 }
 
 const pad = (n) => String(Math.floor(n)).padStart(2, '0');
@@ -125,9 +221,35 @@ const fmtDuration = (sec) => {
   const m = Math.floor((s % 3600) / 60);
   return h > 0 ? `${h}:${pad(m)}:${pad(s % 60)}` : `${pad(m)} : ${pad(s % 60)}`;
 };
+/** "2시간 11분" 처럼 사람이 읽는 소요 시간. 완료 '시각'과 구분해서 쓴다. */
+const fmtKoDuration = (sec) => {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+  if (m > 0) return `${m}분`;
+  return `${s}초`;
+};
 const fmtClock = (d, withSeconds = true) =>
   `${pad(d.getHours())}:${pad(d.getMinutes())}${withSeconds ? `:${pad(d.getSeconds())}` : ''}`;
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+/** 0.25 를 toFixed(1) 로 찍으면 "0.3" 이 되어버린다. 단계값은 그대로 보여준다. */
+const fmtSpeed = (v) => String(v);
+
+/**
+ * 3D 재생 배속의 '표시값'.
+ *  내부 값은 택트타임에서 나온 실수(예: ×0.96)라 화면에 그대로 찍으면 어긋난 값처럼 보인다.
+ *  택트 몇 % 차이는 눈으로 구분되지 않으므로 가장 가까운 배속 단계로 반올림해 보여준다.
+ *  단순 Math.round 를 쓰면 0.25배속(내부 0.24)이 "×0" 이 되므로 단계값에 맞춘다.
+ *  ※ 표시만 다듬는 것이고 실제 재생 속도는 반올림하지 않는다.
+ */
+const MAX_SPEED_STEP = SPEED_STEPS[SPEED_STEPS.length - 1];
+const fmtAnimScale = (v) => {
+  if (v > MAX_SPEED_STEP) return fmtSpeed(Math.round(v)); // 단계 범위를 벗어나면 정수 반올림
+  const nearest = SPEED_STEPS.reduce((best, s) => (Math.abs(s - v) < Math.abs(best - v) ? s : best));
+  return fmtSpeed(nearest);
+};
+const fmtSec = (v) => `${v.toFixed(2)}s`;
 const fmtKoDateTime = (d) =>
   `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 ${d.getHours() < 12 ? '오전' : '오후'} ` +
   `${pad(d.getHours() % 12 || 12)}:${pad(d.getMinutes())}`;
@@ -165,12 +287,15 @@ const StatusLamp = ({ state, size = 'sm', showLabel = true }) => {
   );
 };
 
-const GhostButton = ({ icon: Icon, children, onClick, theme, danger = false, className = '' }) => (
+const GhostButton = ({ icon: Icon, children, onClick, theme, danger = false, disabled = false, title, className = '' }) => (
   <button
     type="button"
     onClick={onClick}
+    disabled={disabled}
+    title={title}
     className={`inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1.5
       text-[11px] font-medium whitespace-nowrap transition-colors focus:outline-none focus:ring-2 ${theme.accentRing}
+      disabled:opacity-30 disabled:cursor-not-allowed
       ${danger
         ? 'border-red-500/40 text-red-500 hover:bg-red-500/10'
         : `${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg}`} ${className}`}
@@ -265,7 +390,7 @@ const BrandLogo = ({ theme }) => {
 const TopGnb = ({
   theme, mode, onModeChange, plant, onPlantChange,
   eStopEngaged, onEStop, now, simElapsed, speed,
-  appearance, onToggleAppearance,
+  appearance, onToggleAppearance, faultActive, onFaultTest,
 }) => (
   <header className={`h-14 shrink-0 flex items-center justify-between gap-4 px-4 border-b ${theme.panelBorder} ${theme.headerBg} z-30`}>
     {/* --- 좌: 로고 + 라인 선택 --- */}
@@ -296,8 +421,24 @@ const TopGnb = ({
       </div>
     </div>
 
-    {/* --- 중앙: 운전 / 시뮬레이션 토글 --- */}
-    <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`}>
+    {/* --- 중앙: 오류 테스트 + 운전 / 시뮬레이션 토글 --- */}
+    <div className="flex items-center gap-2.5">
+      {/* 개발/데모용 — 실제 연동 시에는 OPC-UA 알람 수신으로 대체된다 */}
+      <button
+        type="button"
+        onClick={onFaultTest}
+        title={faultActive ? '발생시킨 오류를 해제합니다' : '설비 오류 상황을 임의로 발생시킵니다'}
+        className={`flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-semibold whitespace-nowrap
+          transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/40
+          ${faultActive
+            ? 'border-red-500/50 bg-red-500/10 text-red-500 hover:bg-red-500/20'
+            : `${theme.panelBorder} ${theme.textMuted} ${theme.hoverBg}`}`}
+      >
+        <Siren className="w-3.5 h-3.5" />
+        {faultActive ? '오류 해제' : '오류 상황 테스트'}
+      </button>
+
+      <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`}>
       <span
         className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full transition-all duration-300 ease-out
           ${theme.accentBg} ${mode === 'operation' ? 'left-1' : 'left-[calc(50%+3px)]'}`}
@@ -317,6 +458,7 @@ const TopGnb = ({
           {label}
         </button>
       ))}
+      </div>
     </div>
 
     {/* --- 우: 시계 + 테마 + E-STOP + 프로필 --- */}
@@ -326,7 +468,7 @@ const TopGnb = ({
           {mode === 'operation' ? (
             <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />LIVE</>
           ) : (
-            <><span className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" />SIM ×{speed.toFixed(1)}</>
+            <><span className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" />SIM ×{fmtSpeed(speed)}</>
           )}
         </span>
         <span className={`mt-1 text-sm font-bold tabular-nums ${theme.textPrimary}`}>
@@ -380,10 +522,12 @@ const TopGnb = ({
  * 5. 좌측 패널
  * ------------------------------------------------------------------------- */
 const LeftDashboardPanel = ({
-  theme, mode, jobs, onRemoveJob, onOpenJobAdd, onOpenExcel,
-  speed, onSpeedChange, currentJob, elapsed, now,
+  theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
+  selectedJobId, onSelectJob,
+  speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
 }) => {
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
+  const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? null;
   const targetQty = jobs.reduce((sum, j) => sum + j.qty, 0);
   const doneQty = currentJob ? Math.round(currentJob.qty * (progress / 100)) : 0;
 
@@ -393,12 +537,35 @@ const LeftDashboardPanel = ({
     return fmtClock(new Date(now.getTime() + remain * 1000), false);
   }, [currentJob, elapsed, speed, now]);
 
-  const stages = [
-    { name: '개포장', value: Math.round(progress) },
-    { name: '이송', value: 78 },
-    { name: '충전', value: 54 },
-    { name: '검사', value: 31 },
-  ];
+  /**
+   * 단계별 진행률 — 대기열에서 실제로 계산한다.
+   *  분모: 그 단계에 배정된 대기열 작업들의 표준시간 합.
+   *  분자: 라인 경과시간을 그 단계 물량에 순서대로 채운 값.
+   *
+   *  4개 단계는 순차가 아니라 동시에 돈다(3D 에서도 컨베이어·절단·카트·충전이
+   *  한 사이클 안에서 함께 움직인다). 그래서 선두 작업의 단계만 움직이게 하지 않고
+   *  같은 라인 시계를 네 단계에 모두 적용한다.
+   *  결과적으로 물량이 적은 단계는 빨리 차고, 작업을 추가하면 분모가 늘어 값이 내려간다.
+   *  작업이 하나도 없는 단계는 '—' 로 비워 둔다.
+   */
+  const stages = useMemo(() => {
+    const acc = Object.fromEntries(STAGE_ORDER.map((s) => [s, { total: 0, count: 0 }]));
+    jobs.forEach((job) => {
+      const stage = stageOf(job.name);
+      if (!stage) return;
+      acc[stage].total += job.totalSec;
+      acc[stage].count += 1;
+    });
+    return STAGE_ORDER.map((name) => {
+      const { total, count } = acc[name];
+      return {
+        name,
+        count,
+        totalSec: total,
+        value: total > 0 ? Math.min(100, (Math.min(elapsed, total) / total) * 100) : null,
+      };
+    });
+  }, [jobs, elapsed]);
 
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
@@ -420,7 +587,8 @@ const LeftDashboardPanel = ({
                 현재 작업 · {currentJob?.name ?? '-'}
               </p>
             </div>
-            <StatusLamp state={currentJob?.state ?? 'IDLE'} />
+            {/* 비상 정지 중에는 '작업 중' 대신 정지 상태를 보여준다 */}
+            <StatusLamp state={eStopEngaged ? 'STOPPED' : currentJob?.state ?? 'IDLE'} />
           </div>
 
           <div>
@@ -448,15 +616,25 @@ const LeftDashboardPanel = ({
 
           <ul className="space-y-2 pt-1">
             {stages.map((s) => (
-              <li key={s.name} className="flex items-center gap-2">
-                <span className={`w-11 text-[11px] shrink-0 ${theme.textMuted}`}>{s.name}</span>
+              <li
+                key={s.name}
+                className="flex items-center gap-2"
+                title={s.count > 0
+                  ? `${s.name} · 작업 ${s.count}건 · 총 표준시간 ${fmtDuration(s.totalSec)}`
+                  : `${s.name} · 대기열에 작업 없음`}
+              >
+                <span className={`w-11 text-[11px] shrink-0 ${s.count > 0 ? theme.textMuted : theme.textGhost}`}>
+                  {s.name}
+                </span>
                 <span className={`flex-1 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
                   <span
                     className={`block h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
-                    style={{ width: `${s.value}%`, transition: 'width 900ms linear' }}
+                    style={{ width: `${s.value ?? 0}%`, transition: 'width 900ms linear' }}
                   />
                 </span>
-                <span className={`w-9 text-right text-[11px] tabular-nums ${theme.textSecondary}`}>{s.value}%</span>
+                <span className={`w-9 text-right text-[11px] tabular-nums ${s.value === null ? theme.textGhost : theme.textSecondary}`}>
+                  {s.value === null ? '—' : `${Math.round(s.value)}%`}
+                </span>
               </li>
             ))}
           </ul>
@@ -473,11 +651,16 @@ const LeftDashboardPanel = ({
         />
 
         <ul className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {jobs.map((job, idx) => (
+          {jobs.map((job, idx) => {
+            const picked = job.id === selectedJobId;
+            return (
             <li
               key={job.id}
-              className={`group flex items-center gap-2 rounded-lg border px-2 py-2 transition-colors cursor-grab
+              onClick={() => onSelectJob(picked ? null : job.id)}
+              aria-selected={picked}
+              className={`group flex items-center gap-2 rounded-lg border px-2 py-2 transition-colors cursor-pointer
                 ${idx === 0 ? `${theme.accentBgSoft} ${theme.panelBorder}` : `${theme.panelBorder} ${theme.cardBg} ${theme.hoverBg}`}`}
+              style={picked ? { borderColor: theme.accentHex, boxShadow: `inset 0 0 0 1px ${theme.accentHex}` } : undefined}
             >
               <GripVertical className={`w-3.5 h-3.5 shrink-0 ${theme.textGhost}`} />
               <span className={`w-5 text-[10px] tabular-nums ${theme.textGhost}`}>{pad(idx + 1)}</span>
@@ -487,24 +670,44 @@ const LeftDashboardPanel = ({
                   {job.id} · {job.qty} EA · 표준 {fmtDuration(job.totalSec)}
                 </p>
               </div>
-              <StatusLamp state={job.state} showLabel={false} />
+              {/* 정지 중이면 돌고 있던 작업만 '작업 중지'로 — 대기 작업은 원래대로 대기다 */}
+              <StatusLamp
+                state={eStopEngaged && job.state === 'RUNNING' ? 'STOPPED' : job.state}
+                showLabel={false}
+              />
+              {/* 휴지통도 같은 확인 팝업을 거친다 — 한쪽만 즉시 삭제되면 위험하다 */}
               <button
                 type="button"
-                onClick={() => onRemoveJob(job.id)}
+                onClick={(e) => { e.stopPropagation(); onRequestCancel(job); }}
                 className={`opacity-0 group-hover:opacity-100 transition hover:text-red-500 ${theme.textFaint}`}
-                aria-label={`${job.name} 삭제`}
+                aria-label={`${job.name} 취소`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </li>
-          ))}
+            );
+          })}
         </ul>
 
         <footer className={`grid grid-cols-3 gap-1.5 p-2 border-t ${theme.divider}`}>
           <GhostButton icon={Plus} theme={theme} onClick={onOpenJobAdd}>작업 추가</GhostButton>
           <GhostButton icon={Upload} theme={theme} onClick={onOpenExcel}>엑셀 업로드</GhostButton>
-          <GhostButton icon={X} theme={theme} danger>취소</GhostButton>
+          <GhostButton
+            icon={X}
+            theme={theme}
+            danger
+            disabled={!selectedJob}
+            title={selectedJob ? `${selectedJob.name} 취소` : '대기열에서 취소할 작업을 먼저 선택하세요'}
+            onClick={() => selectedJob && onRequestCancel(selectedJob)}
+          >
+            취소
+          </GhostButton>
         </footer>
+        {!selectedJob && (
+          <p className={`px-2 pb-2 -mt-1 text-[10px] ${theme.textGhost}`}>
+            작업을 클릭해 선택하면 취소할 수 있습니다.
+          </p>
+        )}
       </Panel>
 
       {/* 5-3. 시뮬레이션 배속 ------------------------------------------ */}
@@ -513,22 +716,42 @@ const LeftDashboardPanel = ({
           icon={Settings2}
           title="시뮬레이션 배속"
           theme={theme}
-          right={<span className={`text-xs font-bold tabular-nums ${theme.accentText}`}>{speed.toFixed(1)}x</span>}
+          right={<span className={`text-xs font-bold tabular-nums ${theme.accentText}`}>{fmtSpeed(speed)}x</span>}
         />
         <div className="p-3 pt-2.5">
+          {/* 값이 불균등(0.25~4)이라 슬라이더는 인덱스를 다룬다 */}
           <input
             type="range"
-            min={1} max={4} step={0.5}
-            value={speed}
+            min={0} max={SPEED_STEPS.length - 1} step={1}
+            value={Math.max(0, SPEED_STEPS.indexOf(speed))}
             disabled={mode !== 'simulation'}
-            onChange={(e) => onSpeedChange(Number(e.target.value))}
+            onChange={(e) => onSpeedChange(SPEED_STEPS[Number(e.target.value)])}
             className={`w-full h-1.5 rounded-full appearance-none cursor-pointer ${theme.trackBg}
               disabled:opacity-40 disabled:cursor-not-allowed
               ${mode === 'simulation' ? 'accent-fuchsia-500' : 'accent-sky-500'}`}
           />
-          <div className={`flex justify-between mt-1.5 text-[10px] tabular-nums ${theme.textFaint}`}>
-            {[1, 2, 3, 4].map((v) => <span key={v}>{v}x</span>)}
+          <div className={`flex justify-between mt-1.5 text-[9px] tabular-nums ${theme.textFaint}`}>
+            {SPEED_STEPS.map((v) => (
+              <span key={v} className={v === speed ? `font-bold ${theme.accentText}` : ''}>{fmtSpeed(v)}x</span>
+            ))}
           </div>
+
+          {/* 3D 애니메이션 연동 상태 — 택트타임이 곧 재생 속도다 */}
+          <div className={`mt-2.5 grid grid-cols-2 gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 text-center`}>
+            <div>
+              <p className={`text-[10px] ${theme.textFaint}`}>택트타임</p>
+              <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>
+                {taktSec.toFixed(1)} s/EA
+              </p>
+            </div>
+            <div>
+              <p className={`text-[10px] ${theme.textFaint}`}>3D 재생 배속</p>
+              <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.accentText}`}>
+                ×{fmtAnimScale(animTimeScale)}
+              </p>
+            </div>
+          </div>
+
           {mode !== 'simulation' && (
             <p className={`mt-2 text-[10px] leading-relaxed ${theme.textFaint}`}>
               실시간 운전 중에는 배속 조절이 잠깁니다. 시뮬레이션 모드로 전환하세요.
@@ -543,23 +766,110 @@ const LeftDashboardPanel = ({
 /* ---------------------------------------------------------------------------
  * 6. 중앙 - 3D 뷰포트 (+ CCTV PIP)
  * ------------------------------------------------------------------------- */
+const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused }) => {
+  const [open, setOpen] = useState(true);
+  const pct = (t) => `${(t / PROCESS_CYCLE_SEC) * 100}%`;
+  const active = PROCESS_PHASES.filter((p) => processTime >= p.start && processTime <= p.end);
+
+  return (
+    <div className={`w-[384px] rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
+      <header className={`flex items-center justify-between px-2.5 py-1.5 border-b ${theme.divider}`}>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Workflow className={`w-3.5 h-3.5 shrink-0 ${theme.accentText}`} />
+          <span className={`text-[11px] font-semibold ${theme.textPrimary}`}>공정 시퀀스</span>
+          <span className={`ml-1 px-1.5 py-0.5 rounded text-[9px] tabular-nums border ${theme.chip}`}>
+            ×{fmtAnimScale(animTimeScale)}
+          </span>
+          <span className={`truncate text-[9px] ${theme.textFaint}`}>
+            {paused ? '정지됨' : active.map((p) => p.label).join(' · ') || '대기'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[10px] font-bold tabular-nums ${theme.accentText}`}>{fmtSec(processTime)}</span>
+          <button type="button" onClick={() => setOpen((v) => !v)} className={`text-[10px] px-1 ${theme.textMuted}`}>
+            {open ? '접기' : '펼치기'}
+          </button>
+        </div>
+      </header>
+
+      {open && (
+        <div className="relative p-2 space-y-1">
+          {PROCESS_PHASES.map((p) => {
+            const on = processTime >= p.start && processTime <= p.end;
+            return (
+              <div key={p.id} className="flex items-center gap-2">
+                <span className={`w-[62px] shrink-0 text-[9px] truncate ${on ? theme.textPrimary : theme.textFaint}`}>
+                  {p.label}
+                </span>
+                <span className={`relative flex-1 h-2.5 rounded-sm overflow-hidden ${theme.trackBg}`}>
+                  <span
+                    className="absolute inset-y-0 rounded-sm transition-opacity duration-150"
+                    style={{
+                      left: pct(p.start),
+                      width: pct(p.end - p.start),
+                      backgroundColor: theme.accentHex,
+                      opacity: on ? 0.95 : 0.28,
+                    }}
+                  />
+                </span>
+                <span className={`w-[54px] shrink-0 text-right text-[9px] tabular-nums ${theme.textGhost}`}>
+                  {p.start.toFixed(1)}–{p.end.toFixed(1)}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* 재생 헤드 — 라벨/시각 열을 빼고 트랙 영역에만 걸친다
+              (좌: 패딩 8 + 라벨 62 + gap 8 = 78 / 우: 패딩 8 + 시각 54 + gap 8 = 70) */}
+          <span
+            className="pointer-events-none absolute top-2 bottom-2"
+            style={{ left: 78, right: 70 }}
+          >
+            <span
+              className="absolute top-0 bottom-0 w-px"
+              style={{ left: pct(processTime), backgroundColor: theme.accentHex, opacity: 0.9 }}
+            />
+          </span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TwinViewport = ({
   theme, mode, selectedId, selectedAsset, onSelect,
-  offsets, onMove, onOffsetReset, now, simElapsed, speed, onExpandCam,
+  offsets, offsetsByLine, onMove, onOffsetReset, now, simElapsed, speed, onExpandCam,
+  animTimeScale, animByLine, animPaused, activeLineId, faults, focusRequest,
 }) => {
   const controlsRef = useRef(null);
   const wrapperRef = useRef(null);
+  /**
+   * 3D 공정 애니메이션의 현재 사이클 시각(0~7.2s). 씬이 4Hz 로 올려준다.
+   * 이 상태를 루트에 두면 초당 4번 대시보드 전체가 리렌더되므로 뷰포트에 가둔다.
+   * 씬 자체도 이 틱에 휩쓸리지 않도록 memo 로 감싼 Scene 을 쓴다.
+   */
+  const [processTime, setProcessTime] = useState(0);
   const [cctvOpen, setCctvOpen] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [showShell, setShowShell] = useState(true);
   const [shellOpacity, setShellOpacity] = useState(0.5);
   const [viewPanelOpen, setViewPanelOpen] = useState(false);
 
+  /* 홈 시점은 라인 1호기 기준이라, 선택된 라인 원점만큼 밀어서 되돌린다 */
   const resetCamera = () => {
     const c = controlsRef.current;
     if (!c) return;
-    c.object.position.set(...CAMERA_HOME.position);
-    c.target.set(...CAMERA_HOME.target);
+    const [ox, oy, oz] = findLine(activeLineId).origin;
+    c.object.position.set(
+      CAMERA_HOME.position[0] + ox,
+      CAMERA_HOME.position[1] + oy,
+      CAMERA_HOME.position[2] + oz
+    );
+    c.target.set(
+      CAMERA_HOME.target[0] + ox,
+      CAMERA_HOME.target[1] + oy,
+      CAMERA_HOME.target[2] + oz
+    );
     c.update();
   };
 
@@ -585,14 +895,19 @@ const TwinViewport = ({
         className={`relative w-full h-full rounded-xl overflow-hidden border ${theme.panelBorder} ${theme.glow}`}
         style={{ backgroundColor: theme.scene.bg }}
       >
-        <FactoryScene
+        <Scene
           selectedId={selectedId}
           onSelect={onSelect}
+          activeLineId={activeLineId}
           showGrid={showGrid}
           showShell={showShell}
           shellOpacity={shellOpacity}
-          offsets={offsets}
+          offsetsByLine={offsetsByLine}
           onMove={onMove}
+          animByLine={animByLine}
+          onProcessTick={setProcessTime}
+          faults={faults}
+          focusRequest={focusRequest}
           theme={theme}
           controlsRef={controlsRef}
         />
@@ -628,7 +943,7 @@ const TwinViewport = ({
         {/* --- 좌상단 상태 HUD --- */}
         <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
           <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border ${theme.chip}`}>
-            {mode === 'simulation' ? `SIMULATION ×${speed.toFixed(1)}` : 'LIVE'}
+            {mode === 'simulation' ? `SIMULATION ×${fmtSpeed(speed)}` : 'LIVE'}
           </span>
           <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold tabular-nums
             border ${theme.panelBorder} ${theme.overlayBg} ${theme.textPrimary} backdrop-blur-sm`}>
@@ -725,8 +1040,17 @@ const TwinViewport = ({
           </p>
         </div>
 
-        {/* --- 하단 CCTV PIP --- */}
-        <div className="absolute bottom-3 left-3 flex justify-start pointer-events-none">
+        {/* --- 좌하단 : 공정 시퀀스 HUD + CCTV PIP --- */}
+        <div className="absolute bottom-3 left-3 flex flex-col items-start gap-2 pointer-events-none">
+          <div className="pointer-events-auto">
+            <ProcessSequenceHud
+              theme={theme}
+              processTime={processTime}
+              animTimeScale={animTimeScale}
+              paused={animPaused}
+            />
+          </div>
+
           <div className={`pointer-events-auto rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
             <header className={`flex items-center justify-between px-2.5 py-1.5 border-b ${theme.divider}`}>
               <div className="flex items-center gap-1.5">
@@ -790,19 +1114,31 @@ const TwinViewport = ({
 /* ---------------------------------------------------------------------------
  * 7. 우측 사이드바
  * ------------------------------------------------------------------------- */
-const AssetDetailSidebar = ({ theme, mode, asset, onClose, now, memos, onAddMemo }) => {
+const AssetDetailSidebar = ({ theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo }) => {
   const [simCount, setSimCount] = useState(100);
   const [simRunning, setSimRunning] = useState(false);
   const [memoDraft, setMemoDraft] = useState('');
   const [historyOpen, setHistoryOpen] = useState(true);
 
+  /* 사이클타임 × 횟수 = 총 소요 시간. 완료 '시각'과 걸리는 '시간'을 함께 보여준다. */
+  const simTotalSec = asset ? asset.cycleSec * simCount : 0;
   const eta = useMemo(() => {
     if (!asset) return '--:--';
-    return fmtClock(new Date(now.getTime() + asset.cycleSec * simCount * 1000), false);
-  }, [asset, simCount, now]);
+    return fmtClock(new Date(now.getTime() + simTotalSec * 1000), false);
+  }, [asset, simTotalSec, now]);
 
   const open = Boolean(asset);
-  const status = STATUS[asset?.status ?? 'IDLE'];
+  /**
+   * 표시 상태의 우선순위: 설비 오류 > 라인 비상 정지 > 마스터 상태.
+   * 오류가 더 구체적이고 조치가 필요한 정보라 정지보다 앞선다.
+   */
+  const statusKey = fault ? 'ERROR' : lineStopped ? 'STOPPED' : asset?.status ?? 'IDLE';
+  const status = STATUS[statusKey];
+  const statusMessage = fault
+    ? `[${fault.code}] ${fault.title}`
+    : lineStopped
+      ? '비상 정지로 라인 인터록 작동 중'
+      : asset?.statusMessage ?? '-';
 
   const submitMemo = () => {
     const text = memoDraft.trim();
@@ -843,13 +1179,34 @@ const AssetDetailSidebar = ({ theme, mode, asset, onClose, now, memos, onAddMemo
             </div>
           )}
 
-          <div className={`mt-2 flex items-center gap-3 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-            <StatusLamp state={asset?.status ?? 'IDLE'} size="lg" showLabel={false} />
+          <div
+            className={`mt-2 flex items-center gap-3 rounded-lg border px-3 py-2
+              ${fault ? 'border-red-500/50 bg-red-500/10' : `${theme.panelBorder} ${theme.subtleBg}`}`}
+          >
+            <StatusLamp state={statusKey} size="lg" showLabel={false} />
             <div className="min-w-0">
               <p className={`text-[12px] font-semibold ${status?.text}`}>{status?.label}</p>
-              <p className={`text-[11px] truncate ${theme.textMuted}`}>{asset?.statusMessage ?? '-'}</p>
+              <p className={`text-[11px] truncate ${theme.textMuted}`}>{statusMessage}</p>
             </div>
           </div>
+
+          {/* 오류 상세 — 알람으로 올라온 내용을 설비 화면에서 다시 확인한다 */}
+          {fault && (
+            <div className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-red-500">
+                  <Siren className="w-3.5 h-3.5" /> 설비 오류 발생
+                </span>
+                <span className={`text-[10px] tabular-nums ${theme.textMuted}`}>
+                  {fmtDate(fault.at)} {fmtClock(fault.at)}
+                </span>
+              </div>
+              <p className={`mt-1.5 text-[11px] leading-relaxed ${theme.textSecondary}`}>{fault.detail}</p>
+              <p className={`mt-1.5 text-[10px] ${theme.textFaint}`}>
+                운전 정지 상태입니다. 조치 후 상단 버튼으로 알람을 해제하세요.
+              </p>
+            </div>
+          )}
         </header>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -933,11 +1290,22 @@ const AssetDetailSidebar = ({ theme, mode, asset, onClose, now, memos, onAddMemo
                 />
               </label>
 
-              <div className={`flex items-center justify-between rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-                <span className={`flex items-center gap-1.5 text-[11px] ${theme.textMuted}`}>
-                  <Clock className="w-3.5 h-3.5" /> 예측 완료 시간
-                </span>
-                <span className={`text-sm font-bold tabular-nums ${theme.accentText}`}>{eta}</span>
+              <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 space-y-1.5`}>
+                <div className="flex items-center justify-between">
+                  <span className={`flex items-center gap-1.5 text-[11px] ${theme.textMuted}`}>
+                    <Clock className="w-3.5 h-3.5" /> 예상 소요 시간
+                  </span>
+                  <span className={`text-sm font-bold tabular-nums ${theme.accentText}`}>
+                    {asset ? fmtKoDuration(simTotalSec) : '-'}
+                  </span>
+                </div>
+                <div className={`flex items-center justify-between border-t pt-1.5 ${theme.divider}`}>
+                  <span className={`text-[11px] ${theme.textMuted}`}>예측 완료 시각</span>
+                  <span className={`text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{eta}</span>
+                </div>
+                <p className={`text-[10px] tabular-nums ${theme.textGhost}`}>
+                  {asset ? `Cycle ${asset.cycleSec.toFixed(1)}s × ${simCount}회` : '-'}
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -1393,6 +1761,126 @@ const CctvModal = ({ theme, cam, now, onClose }) => (
 );
 
 /* ---------------------------------------------------------------------------
+ * 9-2. 작업 취소 확인 모달
+ *   대기열에서 선택한 작업을 빼기 전에 한 번 되묻는다.
+ *   진행 중(선두) 작업이면 공정이 즉시 끊기므로 경고를 더 붙인다.
+ * ------------------------------------------------------------------------- */
+const JobCancelModal = ({ theme, job, isCurrent, onConfirm, onCancel }) => (
+  <Modal theme={theme} onClose={onCancel} className="w-[400px]">
+    <div className="p-6">
+      <div className="flex items-center gap-3">
+        <span className="grid place-items-center w-11 h-11 rounded-xl bg-red-500/15 text-red-500">
+          <Trash2 className="w-5 h-5" />
+        </span>
+        <div className="min-w-0">
+          <h3 className={`text-base font-bold ${theme.textPrimary}`}>작업 취소</h3>
+          <p className={`text-[11px] mt-0.5 tabular-nums ${theme.textMuted}`}>{job.id}</p>
+        </div>
+      </div>
+
+      <p className={`mt-4 text-[12px] leading-relaxed ${theme.textSecondary}`}>
+        <span className={`font-semibold ${theme.textPrimary}`}>{job.name}</span> 을(를) 대기열에서 제거합니다.
+        {isCurrent && ' 진행 중인 작업이라 현재 공정이 즉시 중단되고 다음 작업이 올라옵니다.'}
+        {' 되돌릴 수 없습니다.'}
+      </p>
+
+      <div className={`mt-3 grid grid-cols-3 gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 text-center`}>
+        {[['수량', `${job.qty} EA`], ['표준시간', fmtDuration(job.totalSec)], ['상태', STATUS[job.state]?.label ?? '-']].map(([k, v]) => (
+          <div key={k}>
+            <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
+            <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className={`h-10 rounded-lg border ${theme.panelBorder} text-[12px] font-semibold ${theme.textSecondary} ${theme.hoverBg}`}
+        >
+          돌아가기
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="h-10 rounded-lg bg-red-600 hover:bg-red-500 text-[12px] font-bold text-white"
+        >
+          작업 취소
+        </button>
+      </div>
+    </div>
+  </Modal>
+);
+
+/* ---------------------------------------------------------------------------
+ * 9-3. 설비 오류 알람 팝업
+ * ---------------------------------------------------------------------------
+ *  현장에서 올라온 설비 오류를 즉시 알린다. 어느 라인 · 어느 설비 · 언제 ·
+ *  무슨 오류인지를 한 화면에서 읽을 수 있어야 한다.
+ *
+ *  닫기 버튼도, 바깥 클릭으로 닫기도 없다. 놓치면 안 되는 알림이라
+ *  '해당 설비로 이동'을 눌러 확인해야만 사라지고 비네팅도 그때 멈춘다.
+ * ------------------------------------------------------------------------- */
+const FaultAlarmModal = ({ theme, alarm, lineName, asset, onGoTo }) => (
+  <Modal theme={theme} onClose={() => {}} className="w-[480px]">
+    <div className="border-b-4 border-red-600">
+      <header className="flex items-center gap-3 px-5 py-4 bg-red-600/15">
+        <span className="grid place-items-center w-12 h-12 rounded-xl bg-red-600 text-white shrink-0 animate-pulse">
+          <Siren className="w-6 h-6" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold tracking-[0.2em] text-red-500">EQUIPMENT FAULT</p>
+          <h3 className={`mt-0.5 text-[17px] font-bold truncate ${theme.textPrimary}`}>
+            {alarm.title}
+          </h3>
+          <p className={`text-[11px] mt-0.5 tabular-nums ${theme.textMuted}`}>
+            알람 코드 {alarm.code}
+          </p>
+        </div>
+      </header>
+    </div>
+
+    <div className="p-5 space-y-3">
+      <dl className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} divide-y ${theme.divider}`}>
+        {[
+          ['생산 라인', lineName],
+          ['발생 설비', asset ? `${asset.name} (${asset.nameKo})` : alarm.assetId],
+          ['설비 위치', asset?.role ?? '-'],
+          ['발생 시각', `${fmtDate(alarm.at)} ${fmtClock(alarm.at)}`],
+        ].map(([k, v]) => (
+          <div key={k} className="flex items-start gap-3 px-3 py-2">
+            <dt className={`w-[68px] shrink-0 text-[11px] ${theme.textFaint}`}>{k}</dt>
+            <dd className={`flex-1 text-[12px] font-medium ${theme.textSecondary}`}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5">
+        <p className="text-[11px] font-bold text-red-500">오류 내용</p>
+        <p className={`mt-1 text-[12px] leading-relaxed ${theme.textSecondary}`}>{alarm.detail}</p>
+      </div>
+
+      <p className={`text-[11px] leading-relaxed ${theme.textFaint}`}>
+        해당 설비는 운전을 멈춘 상태입니다. 아래 버튼을 누르면 알람을 확인 처리하고
+        3D 화면이 해당 설비로 이동합니다.
+      </p>
+
+      <button
+        type="button"
+        onClick={onGoTo}
+        className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-lg
+          bg-red-600 hover:bg-red-500 text-[13px] font-bold text-white
+          focus:outline-none focus:ring-4 focus:ring-red-500/40 transition-colors"
+      >
+        <Crosshair className="w-4 h-4" />
+        해당 설비로 이동
+      </button>
+    </div>
+  </Modal>
+);
+
+/* ---------------------------------------------------------------------------
  * 10. E-STOP 확인 모달
  * ------------------------------------------------------------------------- */
 const EStopModal = ({ theme, engaged, plantName, onConfirm, onCancel }) => (
@@ -1439,46 +1927,172 @@ export default function DigitalTwinDashboard() {
   const [appearance, setAppearance] = useState('dark');
   const [mode, setMode] = useState('operation');
   const [plant, setPlant] = useState(PLANTS[0].id);
-  const [jobs, setJobs] = useState(INITIAL_JOBS);
+  /* 대기열은 라인별로 완전히 분리된다. 작업 카탈로그(templates)만 라인 공용이다. */
+  const [jobsByLine, setJobsByLine] = useState(INITIAL_JOBS_BY_LINE);
   const [templates, setTemplates] = useState(INITIAL_JOB_TEMPLATES);
   const [speed, setSpeed] = useState(1);
   const [selectedId, setSelectedId] = useState(null);
-  const [eStopEngaged, setEStopEngaged] = useState(false);
+  /* 비상 정지는 라인 단위다 — 한 라인을 세워도 다른 라인은 계속 돈다 */
+  const [eStopByLine, setEStopByLine] = useState(() =>
+    Object.fromEntries(PLANTS.map((l) => [l.id, false]))
+  );
+
+  /* 대기열에서 선택한 작업 (취소 대상) */
+  const [selectedJobId, setSelectedJobId] = useState(null);
+
+  /**
+   * 설비 오류 알람.
+   *  alarm      — 발생한 오류 1건 { lineId, assetId, code, title, detail, at, acked }
+   *  focusRequest — 3D 카메라가 찾아갈 대상. nonce 로 같은 설비 재요청도 구분한다.
+   *  확인(acked) 전에는 비네팅이 깜빡이고 팝업이 떠 있다.
+   */
+  const [alarm, setAlarm] = useState(null);
+  const [focusRequest, setFocusRequest] = useState(null);
 
   /* 모달 */
+  const [jobCancelTarget, setJobCancelTarget] = useState(null);
   const [eStopModal, setEStopModal] = useState(false);
   const [jobAddModal, setJobAddModal] = useState(false);
   const [excelModal, setExcelModal] = useState(false);
   const [expandedCam, setExpandedCam] = useState(null);
 
-  /* 설비별 배치 오프셋 / 메모 */
-  const [offsets, setOffsets] = useState(() =>
-    Object.fromEntries(FACTORY_ASSETS.map((a) => [a.id, [...a.offset]]))
-  );
+  /* 라인별 설비 배치 오프셋 / 설비별 메모(라인 공용 — 설비 마스터가 공용이라) */
+  const [offsetsByLine, setOffsetsByLine] = useState(INITIAL_OFFSETS_BY_LINE);
   const [memos, setMemos] = useState({});
 
-  const theme = getTheme(appearance, mode);
+  /* 매초 시계 갱신으로 루트가 리렌더되므로, 씬의 memo 가 깨지지 않게 참조를 고정한다 */
+  const theme = useMemo(() => getTheme(appearance, mode), [appearance, mode]);
+
+  /* 화면에 보이는 것은 전부 '선택된 라인'의 상태다 */
+  const jobs = jobsByLine[plant] ?? [];
+  const offsets = offsetsByLine[plant] ?? {};
   const currentJob = jobs[0] ?? null;
   const selectedAsset = useMemo(() => findAsset(selectedId), [selectedId]);
   const plantName = PLANTS.find((p) => p.id === plant)?.name ?? '';
 
+  /* 화면 곳곳(GNB 버튼·프레임·모달)이 보는 것은 '지금 선택된 라인'의 정지 여부 */
+  const eStopEngaged = Boolean(eStopByLine[plant]);
+  const stoppedLines = PLANTS.filter((l) => eStopByLine[l.id]);
+
   const now = useWallClock();
-  const elapsed = useJobTimer({
-    totalSec: currentJob?.totalSec ?? 900,
+  const elapsedByLine = useLineJobTimers({
+    jobsByLine,
     speed: mode === 'simulation' ? speed : 1,
-    paused: eStopEngaged,
+    pausedByLine: eStopByLine,
   });
+  const elapsed = elapsedByLine[plant] ?? 0;
+
+  /**
+   * 3D 애니메이션 배속 연동 — 라인별로 계산한다.
+   *  GLB 의 "TOTAL" 클립 1회(7.2s)가 곧 제품 1개를 흘려보내는 1사이클이다.
+   *  각 라인의 선두 작업 택트타임(표준시간 ÷ 수량)만큼 걸리도록 재생 속도를 맞추면,
+   *  화면 속 설비 동작 주기가 그 라인의 실제 생산 리듬과 같아진다.
+   *    timeScale = 클립길이 / 택트타임 × (시뮬레이션 배속)
+   *  엑셀 업로드로 택트가 극단적인 작업이 들어와도 눈으로 볼 수 있게 비율을 제한한다.
+   *  비상 정지된 라인은 paused 로 그 자리에 멈춘다.
+   */
+  const taktOf = (job) =>
+    job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC;
+  const scaleOf = (takt) =>
+    Math.min(4, Math.max(0.1, PROCESS_CYCLE_SEC / takt)) * (mode === 'simulation' ? speed : 1);
+
+  const animByLine = useMemo(
+    () =>
+      Object.fromEntries(
+        PLANTS.map((line) => [
+          line.id,
+          {
+            timeScale: scaleOf(taktOf(jobsByLine[line.id]?.[0] ?? null)),
+            paused: Boolean(eStopByLine[line.id]),
+          },
+        ])
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [jobsByLine, eStopByLine, mode, speed]
+  );
+
+  /* 좌측 패널·HUD·푸터에 숫자로 보여주는 값은 선택된 라인 기준 */
+  const taktSec = taktOf(currentJob);
+  const animTimeScale = animByLine[plant]?.timeScale ?? 1;
+
+  /* 오류가 걸린 설비 — 3D 하이라이트와 상세 패널이 같은 소스를 본다 */
+  const faults = useMemo(
+    () => (alarm ? { [alarm.lineId]: alarm.assetId } : {}),
+    [alarm]
+  );
+  const selectedAssetFault =
+    alarm && alarm.lineId === plant && alarm.assetId === selectedId ? alarm : null;
+
+  /**
+   * 오류 상황 테스트 — 무작위 라인 · 무작위 시나리오로 알람을 발생시킨다.
+   * 이미 발생한 오류가 있으면 해제 버튼으로 동작한다.
+   */
+  const handleFaultTest = () => {
+    if (alarm) {
+      setAlarm(null);
+      return;
+    }
+    const scenario = FAULT_SCENARIOS[Math.floor(Math.random() * FAULT_SCENARIOS.length)];
+    const line = PLANTS[Math.floor(Math.random() * PLANTS.length)];
+    setAlarm({ ...scenario, lineId: line.id, at: new Date(), acked: false });
+  };
+
+  /** 알람 확인 — 비네팅을 멈추고, 해당 라인으로 전환한 뒤 그 설비를 선택·줌인한다 */
+  const handleGoToFault = () => {
+    if (!alarm) return;
+    setAlarm((prev) => ({ ...prev, acked: true }));
+    setPlant(alarm.lineId);
+    setSelectedJobId(null);
+    setSelectedId(alarm.assetId);
+    setFocusRequest({ assetId: alarm.assetId, nonce: Date.now() });
+  };
+
+  /** 비상 정지 — 지금 선택된 라인만 세우거나 해제한다 */
+  const handleEStopToggle = () =>
+    setEStopByLine((prev) => ({ ...prev, [plant]: !prev[plant] }));
+
+  /* 라인을 바꾸면 이전 라인을 가리키던 선택은 전부 버린다 (설비도 대기열 작업도) */
+  const handlePlantChange = (next) => {
+    setPlant(next);
+    setSelectedId(null);
+    setSelectedJobId(null);
+  };
 
   const handleModeChange = (next) => {
     setMode(next);
     if (next === 'operation') setSpeed(1);
   };
 
-  /* 3D 기즈모 드래그가 끝날 때 한 번 호출된다 */
-  const handleMove = (id, position) => setOffsets((prev) => ({ ...prev, [id]: position }));
+  /**
+   * 3D 기즈모 드래그가 끝날 때 한 번 호출된다.
+   * 조작 가능한 것은 선택된 라인뿐이므로 그 라인의 배치에만 기록한다.
+   * (씬 memo 유지를 위해 참조 고정 — plant 가 바뀔 때만 새로 만든다)
+   */
+  const handleMove = useCallback(
+    (id, position) =>
+      setOffsetsByLine((prev) => ({
+        ...prev,
+        [plant]: { ...prev[plant], [id]: position },
+      })),
+    [plant]
+  );
 
   const handleOffsetReset = (id) =>
-    setOffsets((prev) => ({ ...prev, [id]: [...(findAsset(id)?.offset ?? [0, 0, 0])] }));
+    setOffsetsByLine((prev) => ({
+      ...prev,
+      [plant]: { ...prev[plant], [id]: [...(findAsset(id)?.offset ?? [0, 0, 0])] },
+    }));
+
+  /** 선택된 라인의 대기열만 갈아끼운다 — 다른 라인은 건드리지 않는다 */
+  const updateLineJobs = (updater) =>
+    setJobsByLine((prev) => ({ ...prev, [plant]: updater(prev[plant] ?? []) }));
+
+  /* 확인 팝업에서 '작업 취소'를 누른 뒤에만 실제로 제거된다 */
+  const handleCancelJob = (id) => {
+    updateLineJobs((prev) => prev.filter((j) => j.id !== id));
+    setSelectedJobId((cur) => (cur === id ? null : cur));
+    setJobCancelTarget(null);
+  };
 
   const handleAddMemo = (assetId, text) =>
     setMemos((prev) => ({
@@ -1486,12 +2100,12 @@ export default function DigitalTwinDashboard() {
       [assetId]: [{ id: Date.now(), at: new Date(), text }, ...(prev[assetId] ?? [])],
     }));
 
-  /** 엑셀에서 선택된 행들을 대기열에 일괄 추가하고, 카탈로그에도 없으면 등록한다 */
+  /** 엑셀에서 선택된 행들을 '선택된 라인' 대기열에 추가하고, 카탈로그에도 없으면 등록한다 */
   const handleImportExcel = (rows) => {
-    setJobs((prev) => [
+    updateLineJobs((prev) => [
       ...prev,
       ...rows.map((r, i) => ({
-        id: `WO-2607-${String(prev.length + i + 1).padStart(3, '0')}`,
+        id: makeJobId(nextJobSeq(prev) + i),
         name: r.name,
         qty: r.qty,
         totalSec: r.totalSec,
@@ -1513,10 +2127,10 @@ export default function DigitalTwinDashboard() {
   };
 
   const handleAddJob = (tpl, qty) =>
-    setJobs((prev) => [
+    updateLineJobs((prev) => [
       ...prev,
       {
-        id: `WO-2607-${String(prev.length + 1).padStart(3, '0')}`,
+        id: makeJobId(nextJobSeq(prev)),
         name: tpl.name,
         qty,
         totalSec: tpl.totalSec,
@@ -1532,12 +2146,17 @@ export default function DigitalTwinDashboard() {
           ${eStopEngaged ? 'ring-red-500/70' : theme.frameRing}`}
       />
 
+      {/* 설비 오류 경광등 — 확인(설비로 이동) 전까지 깜빡인다 */}
+      {alarm && !alarm.acked && (
+        <div className="alarm-vignette pointer-events-none fixed inset-0 z-40" aria-hidden />
+      )}
+
       <TopGnb
         theme={theme}
         mode={mode}
         onModeChange={handleModeChange}
         plant={plant}
-        onPlantChange={setPlant}
+        onPlantChange={handlePlantChange}
         eStopEngaged={eStopEngaged}
         onEStop={() => setEStopModal(true)}
         now={now}
@@ -1545,6 +2164,8 @@ export default function DigitalTwinDashboard() {
         speed={speed}
         appearance={appearance}
         onToggleAppearance={() => setAppearance((a) => (a === 'dark' ? 'light' : 'dark'))}
+        faultActive={Boolean(alarm)}
+        onFaultTest={handleFaultTest}
       />
 
       <div className="relative flex-1 min-h-0 flex">
@@ -1552,7 +2173,9 @@ export default function DigitalTwinDashboard() {
           theme={theme}
           mode={mode}
           jobs={jobs}
-          onRemoveJob={(id) => setJobs((prev) => prev.filter((j) => j.id !== id))}
+          onRequestCancel={setJobCancelTarget}
+          selectedJobId={selectedJobId}
+          onSelectJob={setSelectedJobId}
           onOpenJobAdd={() => setJobAddModal(true)}
           onOpenExcel={() => setExcelModal(true)}
           speed={speed}
@@ -1560,6 +2183,9 @@ export default function DigitalTwinDashboard() {
           currentJob={currentJob}
           elapsed={elapsed}
           now={now}
+          taktSec={taktSec}
+          animTimeScale={animTimeScale}
+          eStopEngaged={eStopEngaged}
         />
 
         <TwinViewport
@@ -1569,18 +2195,27 @@ export default function DigitalTwinDashboard() {
           selectedAsset={selectedAsset}
           onSelect={setSelectedId}
           offsets={offsets}
+          offsetsByLine={offsetsByLine}
           onMove={handleMove}
           onOffsetReset={handleOffsetReset}
           now={now}
           simElapsed={elapsed}
           speed={speed}
           onExpandCam={setExpandedCam}
+          animTimeScale={animTimeScale}
+          animByLine={animByLine}
+          animPaused={eStopEngaged}
+          activeLineId={plant}
+          faults={faults}
+          focusRequest={focusRequest}
         />
 
         <AssetDetailSidebar
           theme={theme}
           mode={mode}
           asset={selectedAsset}
+          fault={selectedAssetFault}
+          lineStopped={eStopEngaged}
           onClose={() => setSelectedId(null)}
           now={now}
           memos={memos[selectedId] ?? []}
@@ -1599,13 +2234,42 @@ export default function DigitalTwinDashboard() {
           </span>
           <span>Latency 24ms</span>
           <span>Sync {fmtDate(now)} {fmtClock(now)}</span>
+          {/* 비상 정지가 라인 단위라, 보고 있지 않은 라인이 멈춰 있어도 알 수 있어야 한다 */}
+          {stoppedLines.length > 0 && (
+            <span className="flex items-center gap-1.5 font-semibold text-red-500">
+              <AlertOctagon className="w-3 h-3" />
+              E-STOP {stoppedLines.map((l) => l.name.replace('DM뷰 - ', '')).join(' · ')}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4">
           <span>선택 가능 설비 {SELECTABLE_ASSETS.length}대</span>
-          <span>{mode === 'simulation' ? `SIM ${speed.toFixed(1)}x` : 'REALTIME 1.0x'}</span>
+          <span>{mode === 'simulation' ? `SIM ${fmtSpeed(speed)}x` : 'REALTIME 1.0x'}</span>
+          <span>{eStopEngaged ? '3D 정지' : `3D ×${fmtAnimScale(animTimeScale)}`}</span>
           <span>{plantName}</span>
         </div>
       </footer>
+
+      {/* 설비 오류 알람 — 확인 전까지 최상단에 떠 있는다 */}
+      {alarm && !alarm.acked && (
+        <FaultAlarmModal
+          theme={theme}
+          alarm={alarm}
+          lineName={PLANTS.find((p) => p.id === alarm.lineId)?.name ?? alarm.lineId}
+          asset={findAsset(alarm.assetId)}
+          onGoTo={handleGoToFault}
+        />
+      )}
+
+      {jobCancelTarget && (
+        <JobCancelModal
+          theme={theme}
+          job={jobCancelTarget}
+          isCurrent={jobCancelTarget.id === currentJob?.id}
+          onCancel={() => setJobCancelTarget(null)}
+          onConfirm={() => handleCancelJob(jobCancelTarget.id)}
+        />
+      )}
 
       {eStopModal && (
         <EStopModal
@@ -1613,7 +2277,7 @@ export default function DigitalTwinDashboard() {
           engaged={eStopEngaged}
           plantName={plantName}
           onCancel={() => setEStopModal(false)}
-          onConfirm={() => { setEStopEngaged((v) => !v); setEStopModal(false); }}
+          onConfirm={() => { handleEStopToggle(); setEStopModal(false); }}
         />
       )}
 

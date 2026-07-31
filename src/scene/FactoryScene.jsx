@@ -17,23 +17,46 @@
  * ---------------------------------------------------------------------------
  */
 
-import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Grid, Html, OrbitControls, TransformControls, useGLTF, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
-import { FACTORY_ASSETS, SHELL_ASSET, STATUS } from '../data/factoryAssets.js';
+import {
+  ANIMATION_CLIP,
+  FACTORY_ASSETS,
+  PRODUCTION_LINES,
+  PROCESS_CYCLE_SEC,
+  SHELL_ASSET,
+  STATUS,
+} from '../data/factoryAssets.js';
 
 /* 설비 셀이 4.5×3.2×6.9m 규모라 카메라도 가깝게 잡는다 */
 const CAMERA_HOME = { position: [8.5, 5.2, 9.5], target: [0.4, 1.3, 0] };
+
+/**
+ * 그리드를 바닥에서 살짝 띄우는 높이(m).
+ *  인테리어 바닥 상면을 Y=0 에 맞춘 뒤로 그리드 평면과 바닥면이 완전히 같은
+ *  높이에 놓여, 깊이값이 동일해지면서 z-fighting 이 발생한다(카메라를 움직이면
+ *  얇은 셀 라인이 반짝임). 셸이 depthWrite:false 라 깊이 우선순위도 불안정하다.
+ *  1.5cm 만 띄우면 겹침이 사라지고, 22×52m 공간에서는 눈에 띄지 않는다.
+ */
+const GRID_LIFT = 0.015;
+
+/**
+ * 선택되지 않은 라인의 불투명도.
+ *  형태는 알아볼 수 있으면서 활성 라인을 가리지 않는 값. 0 으로 두면 라인이
+ *  통째로 사라져 '어디에 뭐가 있는지' 감이 없어지므로 흐리게 남긴다.
+ */
+const INACTIVE_LINE_OPACITY = 0.16;
 
 /* ---------------------------------------------------------------------------
  * GLB 를 원본 좌표 그대로 복제한다.
  * useGLTF 는 URL 별로 동일 인스턴스를 캐시하므로 반드시 clone 해서 쓴다.
  * ------------------------------------------------------------------------- */
 function useAssembledModel(url, { transparent = false, opacity = 1 } = {}) {
-  const { scene } = useGLTF(url);
+  const { scene, animations } = useGLTF(url);
 
-  return useMemo(() => {
+  const result = useMemo(() => {
     const object = scene.clone(true);
     object.updateMatrixWorld(true);
 
@@ -46,7 +69,9 @@ function useAssembledModel(url, { transparent = false, opacity = 1 } = {}) {
     object.traverse((child) => {
       if (!child.isMesh) return;
       child.material = child.material.clone();
-      child.material.side = THREE.DoubleSide;
+      // 얇은 CAD 판재 때문에 양면 렌더가 필요하지만, 투명 재질에 걸면
+      // 앞뒤 면이 서로 정렬 문제를 일으키므로 불투명 재질에만 적용한다.
+      if (!child.material.transparent) child.material.side = THREE.DoubleSide;
       if (transparent) {
         child.material.transparent = true;
         child.material.opacity = opacity;
@@ -56,6 +81,155 @@ function useAssembledModel(url, { transparent = false, opacity = 1 } = {}) {
 
     return { object, size, center };
   }, [scene, transparent, opacity]);
+
+  return { ...result, animations };
+}
+
+/* ---------------------------------------------------------------------------
+ * 알파맵 보정
+ * ---------------------------------------------------------------------------
+ *  3ds Max Physical Material 의 Cutout 슬롯을 Babylon 익스포터가 인식하지 못해
+ *  일부 GLB 에 투명도가 실리지 않았다. 원본 알파맵을 런타임에 물려 복원한다.
+ *
+ *  flipY = false 가 핵심이다. glTF 는 UV 원점이 좌상단인데 TextureLoader 는
+ *  기본이 좌하단(flipY=true)이라, 뒤집힌 채로 샘플링하면 유리 UV 자리가
+ *  전부 알파 0 인 영역을 가리켜 메시가 통째로 사라진다.
+ *  (측정: 정방향 126/255 균일 · 뒤집으면 0)
+ * ------------------------------------------------------------------------- */
+function useAlphaMapOverride(object, alphaMaps) {
+  useEffect(() => {
+    if (!alphaMaps) return undefined;
+    const loader = new THREE.TextureLoader();
+    const loaded = [];
+
+    Object.entries(alphaMaps).forEach(([materialName, url]) => {
+      loader.load(url, (tex) => {
+        tex.flipY = false;
+        tex.colorSpace = THREE.NoColorSpace; // 색이 아니라 마스크 데이터
+        loaded.push(tex);
+        object.traverse((child) => {
+          if (!child.isMesh || child.material?.name !== materialName) return;
+          child.material.alphaMap = tex;
+          child.material.transparent = true;
+          child.material.alphaTest = 0.05; // 완전 투명 텍셀은 폐기해 깊이 오염 방지
+          child.material.side = THREE.FrontSide;
+          child.material.needsUpdate = true;
+        });
+      });
+    });
+
+    return () => loaded.forEach((t) => t.dispose());
+  }, [object, alphaMaps]);
+}
+
+/* ---------------------------------------------------------------------------
+ * 공정 애니메이션
+ * ---------------------------------------------------------------------------
+ *  한 라인의 모든 설비는 "TOTAL"(7.2s) 을 하나의 공유 시계로 같은 시각에 재생한다.
+ *  mixer.update(delta) 를 설비마다 돌리면 프레임 누락 시 서로 어긋나므로,
+ *  절대시각을 지정하는 mixer.setTime() 을 써서 프레임 단위로 동기를 보장한다.
+ *
+ *  시계는 '라인마다 하나'다. 비상 정지가 라인 단위로 걸리기 때문에, 한 라인이
+ *  멈춰도 다른 라인은 계속 돌아가야 한다. 프레임 스탬프 가드도 시계별로 작동하므로
+ *  라인이 늘어도 각 시계는 프레임당 정확히 한 번만 전진한다.
+ *
+ *  시계 전진은 프레임당 정확히 한 번만 일어나야 한다. 설비별 useFrame 이
+ *  각자 전진시키면 설비 수만큼 빨라지기 때문에, 프레임 스탬프로 가드를 건다.
+ *  (별도 클럭 컴포넌트 + useFrame priority 방식은 r3f 에서 자동 렌더링을
+ *   꺼버리는 부작용이 있어 쓰지 않는다)
+ * ------------------------------------------------------------------------- */
+function advanceProcessClock(clock, state, delta) {
+  const stamp = state.clock.elapsedTime;
+  if (clock.stamp === stamp) return; // 이번 프레임엔 이미 누군가 전진시킴
+  clock.stamp = stamp;
+  if (clock.paused) return;
+  clock.time = (clock.time + delta * clock.timeScale) % PROCESS_CYCLE_SEC;
+}
+
+function useProcessAnimation(object, animations, clock) {
+  const mixer = useMemo(() => {
+    const clip = animations?.find((a) => a.name === ANIMATION_CLIP);
+    if (!clip) return null;
+    return new THREE.AnimationMixer(object);
+  }, [object, animations]);
+
+  /**
+   * play() 는 반드시 effect 안에서 해야 한다.
+   * StrictMode 는 mount → unmount → remount 를 한 번 돌리는데,
+   * useMemo 안에서만 play 하면 언마운트 정리에서 멈춘 액션이 다시 살아나지 못해
+   * 믹서·바인딩은 멀쩡한데 액션만 정지(_nActiveActions=0)한 상태가 된다.
+   */
+  useEffect(() => {
+    if (!mixer) return undefined;
+    const clip = animations.find((a) => a.name === ANIMATION_CLIP);
+    const action = mixer.clipAction(clip);
+    action.reset().play();
+    return () => action.stop();
+  }, [mixer, animations]);
+
+  /* 개발 모드 진단용 — 콘솔에서 window.__mixers 로 클립/바인딩/재생 상태 확인 */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const entry = {
+      clips: (animations ?? []).map((a) => a.name),
+      hasTotal: Boolean(animations?.find((a) => a.name === ANIMATION_CLIP)),
+      mixer,
+    };
+    window.__mixers = window.__mixers ?? [];
+    window.__mixers.push(entry);
+    return () => {
+      window.__mixers = window.__mixers.filter((e) => e !== entry);
+    };
+  }, [animations, mixer]);
+
+  useFrame((state, delta) => {
+    advanceProcessClock(clock, state, delta);
+    if (mixer) mixer.setTime(clock.time);
+  });
+
+  return Boolean(mixer);
+}
+
+/* ---------------------------------------------------------------------------
+ * 오류 설비 하이라이트
+ * ---------------------------------------------------------------------------
+ *  알람이 걸린 설비를 붉게 발광시킨다. 색을 통째로 바꾸면 어떤 설비인지
+ *  알아보기 어려워지므로, 원래 색은 두고 emissive(자체 발광)만 얹어 맥동시킨다.
+ *  머티리얼은 useAssembledModel 에서 이미 클론된 사본이라 다른 인스턴스에
+ *  영향을 주지 않지만, 해제 시 원래 값으로 되돌려 놓는다.
+ * ------------------------------------------------------------------------- */
+function useFaultHighlight(object, active) {
+  const meshes = useMemo(() => {
+    const list = [];
+    object.traverse((child) => {
+      if (child.isMesh && child.material?.emissive) list.push(child);
+    });
+    return list;
+  }, [object]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const saved = meshes.map((mesh) => ({
+      mesh,
+      emissive: mesh.material.emissive.clone(),
+      intensity: mesh.material.emissiveIntensity ?? 1,
+    }));
+    return () => {
+      saved.forEach(({ mesh, emissive, intensity }) => {
+        mesh.material.emissive.copy(emissive);
+        mesh.material.emissiveIntensity = intensity;
+      });
+    };
+  }, [meshes, active]);
+
+  useFrame(({ clock }) => {
+    if (!active) return;
+    const pulse = 0.3 + ((Math.sin(clock.elapsedTime * 4.5) + 1) / 2) * 0.7;
+    meshes.forEach((mesh) => {
+      mesh.material.emissive.setRGB(1, 0.05, 0.05);
+      mesh.material.emissiveIntensity = pulse;
+    });
+  });
 }
 
 /* 선택 표시용 와이어프레임 박스 --------------------------------------------- */
@@ -94,15 +268,33 @@ function StatusRing({ radius, center, color, pulse }) {
 /* ---------------------------------------------------------------------------
  * 선택 가능한 설비
  * ------------------------------------------------------------------------- */
-function SelectableModel({ asset, offset, selected, onSelect, onMove, onDragChange, accentHex }) {
-  const { object, size, center } = useAssembledModel(asset.file);
+function SelectableModel({
+  asset, offset, selected, onSelect, onMove, onDragChange, accentHex, clock,
+  faulted = false, stopped = false, registerObject,
+}) {
+  const { object, size, center, animations } = useAssembledModel(asset.file);
+  useProcessAnimation(object, animations, clock);
+  useAlphaMapOverride(object, asset.alphaMaps);
+  useFaultHighlight(object, faulted);
   const [hovered, setHovered] = useState(false);
   const [mounted, setMounted] = useState(false); // ref 가 채워진 뒤에야 기즈모를 붙일 수 있다
   const groupRef = useRef(null);
-  const status = STATUS[asset.status] ?? STATUS.IDLE;
+  /**
+   * 바닥 링 색: 설비 오류 > 라인 비상 정지 > 마스터 상태 순으로 덮어쓴다.
+   * 라인이 멈췄는데 초록 링이 맥동하고 있으면 화면이 거짓말을 하게 된다.
+   */
+  const status =
+    (faulted ? STATUS.ERROR : stopped ? STATUS.STOPPED : STATUS[asset.status]) ?? STATUS.IDLE;
   const radius = Math.max(size.x, size.z) * 0.62;
 
   useEffect(() => setMounted(true), []);
+
+  /* 알람 '설비로 이동' 이 카메라를 맞출 수 있도록 실제 3D 객체를 등록해 둔다 */
+  useEffect(() => {
+    if (!registerObject) return undefined;
+    registerObject(asset.id, groupRef.current);
+    return () => registerObject(asset.id, null);
+  }, [registerObject, asset.id, mounted]);
 
   useEffect(() => {
     document.body.style.cursor = hovered ? 'pointer' : 'auto';
@@ -175,13 +367,79 @@ function SelectableModel({ asset, offset, selected, onSelect, onMove, onDragChan
   );
 }
 
-/* 선택 불가 구조물 — 핸들러가 없으므로 r3f 이벤트 대상에서 자동 제외된다 */
-function StaticModel({ asset, offset }) {
-  const { object } = useAssembledModel(asset.file);
+/**
+ * 선택 불가 구조물 — 핸들러가 없으므로 r3f 이벤트 대상에서 자동 제외된다.
+ * 비활성 라인의 설비도 이걸로 그린다(opacity < 1 인 고스트).
+ *  고스트일 때 알파맵 보정은 건너뛴다. 알파맵이 transparent/alphaTest 를 다시
+ *  건드려서 균일한 반투명이 얼룩지기 때문이다.
+ */
+function StaticModel({ asset, offset, clock, opacity = 1 }) {
+  const ghost = opacity < 1;
+  const { object, animations } = useAssembledModel(asset.file, { transparent: ghost, opacity });
+  useProcessAnimation(object, animations, clock);
+  useAlphaMapOverride(object, ghost ? null : asset.alphaMaps);
   return (
     <group position={offset}>
       <primitive object={object} />
     </group>
+  );
+}
+
+/**
+ * 라인 1대 — FACTORY_ASSETS 한 벌을 라인 원점에 얹는다.
+ *  활성 라인만 선택/기즈모가 살아 있고, 비활성 라인은 전부 고스트라
+ *  핸들러가 없어 클릭을 가로채지 않는다.
+ *
+ *  [ 라인 원점을 group transform 으로 주지 않는 이유 ]
+ *   drei 의 TransformControls 는 기즈모(`<primitive object={controls}>`)를
+ *   자기가 놓인 부모 그룹의 자식으로 그리는데, 컨트롤 자신은 대상 객체의
+ *   '월드' 좌표로 위치를 잡는다. 그래서 <group position={origin}> 안에 두면
+ *   원점이 한 번 더 곱해져 기즈모만 라인 간격(10m)만큼 어긋난 자리에 뜬다.
+ *   설비 좌표에 원점을 미리 더해 전부 월드 좌표에 놓으면 이 이중 적용이 사라진다.
+ */
+function LineGroup({
+  line, active, selectedId, onSelect, onMove, onDragChange, accentHex, offsets, clock,
+  faultedAssetId, stopped, registerObject,
+}) {
+  /* clock 은 이 라인 전용 시계다 — 비상 정지도 라인 단위로 걸린다 */
+  const [ox, oy, oz] = line.origin;
+
+  /* 기즈모가 돌려주는 값은 월드 좌표다. 저장값은 라인 원점을 뺀 '라인 기준 좌표'라
+     라인마다 같은 기준으로 배치를 기록한다(배치 자체는 라인별로 따로 보관한다). */
+  const handleMove = (id, [x, y, z]) =>
+    onMove(id, [+(x - ox).toFixed(2), +(y - oy).toFixed(2), +(z - oz).toFixed(2)]);
+
+  return (
+    <>
+      {FACTORY_ASSETS.map((asset) => {
+        const [x, y, z] = offsets[asset.id] ?? asset.offset;
+        const placed = [x + ox, y + oy, z + oz];
+        return active && asset.selectable ? (
+          <SelectableModel
+            key={asset.id}
+            asset={asset}
+            offset={placed}
+            selected={selectedId === asset.id}
+            onSelect={onSelect}
+            onMove={handleMove}
+            onDragChange={onDragChange}
+            accentHex={accentHex}
+            clock={clock}
+            faulted={asset.id === faultedAssetId}
+            stopped={stopped}
+            registerObject={registerObject}
+          />
+        ) : (
+          <StaticModel
+            key={asset.id}
+            asset={asset}
+            offset={placed}
+            clock={clock}
+            opacity={active ? 1 : INACTIVE_LINE_OPACITY}
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -197,6 +455,107 @@ function FactoryShell({ opacity }) {
     opacity,
   });
   return <primitive object={object} position={SHELL_ASSET.offset} />;
+}
+
+/**
+ * 공정 시각을 UI(React state)로 흘려보낸다.
+ * 매 프레임 setState 하면 60fps 리렌더가 되므로 4Hz 로 솎아낸다.
+ */
+function ProcessTicker({ clock, onTick }) {
+  const last = useRef(0);
+  useFrame((state, delta) => {
+    advanceProcessClock(clock, state, delta);
+    if (!onTick) return;
+    if (state.clock.elapsedTime - last.current < 0.25) return;
+    last.current = state.clock.elapsedTime;
+    onTick(clock.time);
+  });
+  return null;
+}
+
+/**
+ * 라인을 바꾸면 카메라를 새 라인으로 옮긴다.
+ *  홈 시점으로 리셋하지 않고 두 라인 원점의 '차이만큼' 카메라와 타깃을 함께
+ *  평행이동한다. 사용자가 맞춰 둔 각도·줌은 그대로 두고 옆 라인으로 미끄러지듯
+ *  넘어가므로, 시점이 초기화돼 방향을 잃는 일이 없다.
+ */
+function useLineCameraShift(controlsRef, origin) {
+  const prev = useRef(origin);
+  useEffect(() => {
+    const from = prev.current;
+    prev.current = origin;
+    const controls = controlsRef?.current;
+    if (!controls || !from || from === origin) return;
+
+    const delta = new THREE.Vector3(origin[0] - from[0], origin[1] - from[1], origin[2] - from[2]);
+    if (delta.lengthSq() === 0) return;
+    controls.object.position.add(delta);
+    controls.target.add(delta);
+    controls.update();
+  }, [controlsRef, origin]);
+}
+
+/**
+ * 특정 설비로 카메라를 끌고 간다 (알람 → '해당 설비로 이동').
+ *
+ *  대상의 위치는 데이터가 아니라 실제 3D 객체의 바운딩 박스에서 구한다.
+ *  설비마다 조립 좌표가 GLB 안에 구워져 있어 offset 만으로는 실제 중심을
+ *  알 수 없기 때문이다. 크기에 비례해 거리를 잡아 큰 설비도 화면에 담는다.
+ *
+ *  라인을 전환하면서 요청이 오면 대상 설비가 아직 마운트되기 전일 수 있어,
+ *  등록될 때까지 매 프레임 잠깐(2초) 재시도한다.
+ */
+function FocusController({ controlsRef, request, registry }) {
+  const pending = useRef(null);
+  const anim = useRef(null);
+
+  useEffect(() => {
+    if (!request) return;
+    pending.current = { ...request, waited: 0 };
+  }, [request]);
+
+  useFrame((_, delta) => {
+    const controls = controlsRef?.current;
+    if (!controls) return;
+
+    /* 1) 대상 해결 — 등록된 객체를 찾으면 이동 경로를 만든다 */
+    const req = pending.current;
+    if (req) {
+      const object = registry.current[req.assetId];
+      if (object) {
+        pending.current = null;
+        object.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(object);
+        const center = box.getCenter(new THREE.Vector3());
+        const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
+        const distance = Math.max(3.2, radius * 2.4);
+        /* 비스듬히 내려다보는 각도를 유지한 채 접근한다 */
+        const dir = new THREE.Vector3(0.85, 0.62, 0.85).normalize();
+        anim.current = {
+          t: 0,
+          fromTarget: controls.target.clone(),
+          toTarget: center,
+          fromPos: controls.object.position.clone(),
+          toPos: center.clone().add(dir.multiplyScalar(distance)),
+        };
+      } else {
+        req.waited += delta;
+        if (req.waited > 2) pending.current = null; // 못 찾으면 조용히 포기
+      }
+    }
+
+    /* 2) 이동 — 0.9초 동안 부드럽게. 튀지 않게 ease-in-out 을 쓴다 */
+    const a = anim.current;
+    if (!a) return;
+    a.t = Math.min(1, a.t + delta / 0.9);
+    const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - ((-2 * a.t + 2) ** 2) / 2;
+    controls.target.lerpVectors(a.fromTarget, a.toTarget, e);
+    controls.object.position.lerpVectors(a.fromPos, a.toPos, e);
+    controls.update();
+    if (a.t >= 1) anim.current = null;
+  });
+
+  return null;
 }
 
 /* 개발 모드 전용: 콘솔/E2E 에서 씬 검증용. 프로덕션 번들에는 포함되지 않음 */
@@ -217,15 +576,20 @@ function DebugBridge() {
 function SceneContents({
   selectedId,
   onSelect,
+  activeLineId,
   showGrid,
   showShell,
   shellOpacity,
   accentHex,
   gridCell,
-  offsets,
+  offsetsByLine,
   isLight,
   onMove,
   onDragChange,
+  clocks,
+  animByLine,
+  faults,
+  registerObject,
 }) {
   return (
     <>
@@ -244,6 +608,7 @@ function SceneContents({
 
       {showGrid && (
         <Grid
+          position={[0, GRID_LIFT, 0]}
           args={[80, 80]}
           cellSize={1}
           cellThickness={0.6}
@@ -260,23 +625,23 @@ function SceneContents({
 
       {showShell && <FactoryShell opacity={shellOpacity} />}
 
-      {FACTORY_ASSETS.map((asset) => {
-        const offset = offsets[asset.id] ?? asset.offset;
-        return asset.selectable ? (
-          <SelectableModel
-            key={asset.id}
-            asset={asset}
-            offset={offset}
-            selected={selectedId === asset.id}
-            onSelect={onSelect}
-            onMove={onMove}
-            onDragChange={onDragChange}
-            accentHex={accentHex}
-          />
-        ) : (
-          <StaticModel key={asset.id} asset={asset} offset={offset} />
-        );
-      })}
+      {PRODUCTION_LINES.map((line) => (
+        <LineGroup
+          key={line.id}
+          line={line}
+          active={line.id === activeLineId}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          onMove={onMove}
+          onDragChange={onDragChange}
+          accentHex={accentHex}
+          offsets={offsetsByLine[line.id] ?? {}}
+          clock={clocks[line.id]}
+          faultedAssetId={faults?.[line.id] ?? null}
+          stopped={Boolean(animByLine[line.id]?.paused)}
+          registerObject={line.id === activeLineId ? registerObject : undefined}
+        />
+      ))}
     </>
   );
 }
@@ -315,17 +680,51 @@ function LoadingOverlay({ accentHex, isLight }) {
 export default function FactoryScene({
   selectedId,
   onSelect,
+  activeLineId = PRODUCTION_LINES[0].id,
   showGrid = true,
   showShell = true,
   shellOpacity = 0.5,
-  offsets = {},
+  offsetsByLine = {},
   onMove,
+  animByLine = {},
+  onProcessTick,
+  faults = {},
+  focusRequest = null,
   theme,
   controlsRef,
 }) {
   const isLight = theme.appearance === 'light';
   /* 기즈모 드래그로 끝난 포인터업이 '빈 공간 클릭'으로 오인돼 선택이 풀리는 것을 막는다 */
   const draggingRef = useRef(false);
+
+  const activeLine = PRODUCTION_LINES.find((l) => l.id === activeLineId) ?? PRODUCTION_LINES[0];
+  useLineCameraShift(controlsRef, activeLine.origin);
+
+  /* 활성 라인 설비의 실제 3D 객체 — 알람에서 카메라를 맞출 때 쓴다 */
+  const registry = useRef({});
+  const registerObject = useCallback((assetId, object) => {
+    if (object) registry.current[assetId] = object;
+    else delete registry.current[assetId];
+  }, []);
+
+  /**
+   * 라인별 공정 시계 (렌더를 유발하지 않고 매 프레임 갱신된다).
+   * 배속과 정지 여부를 라인마다 따로 받으므로, 한 라인을 비상 정지해도
+   * 다른 라인은 자기 속도로 계속 돌아간다.
+   */
+  const clocksRef = useRef(null);
+  if (!clocksRef.current) {
+    clocksRef.current = Object.fromEntries(
+      PRODUCTION_LINES.map((l) => [l.id, { time: 0, stamp: -1, timeScale: 1, paused: false }])
+    );
+  }
+  PRODUCTION_LINES.forEach((l) => {
+    const clock = clocksRef.current[l.id];
+    const anim = animByLine[l.id];
+    clock.timeScale = anim?.timeScale ?? 1;
+    clock.paused = Boolean(anim?.paused);
+  });
+  const activeClock = clocksRef.current[activeLineId] ?? clocksRef.current[PRODUCTION_LINES[0].id];
 
   return (
     <div className="absolute inset-0">
@@ -344,18 +743,27 @@ export default function FactoryScene({
           <SceneContents
             selectedId={selectedId}
             onSelect={onSelect}
+            activeLineId={activeLineId}
             showGrid={showGrid}
             showShell={showShell}
             shellOpacity={shellOpacity}
             accentHex={theme.accentHex}
             gridCell={theme.scene.gridCell}
-            offsets={offsets}
+            offsetsByLine={offsetsByLine}
             isLight={isLight}
             onMove={onMove}
             onDragChange={(v) => {
               draggingRef.current = v;
             }}
+            clocks={clocksRef.current}
+            animByLine={animByLine}
+            faults={faults}
+            registerObject={registerObject}
           />
+          {/* HUD 는 지금 보고 있는 라인의 공정 시각을 따라간다 */}
+          <ProcessTicker clock={activeClock} onTick={onProcessTick} />
+          {/* 설비 등록(자식 effect)이 끝난 뒤 요청을 처리하도록 라인들보다 뒤에 둔다 */}
+          <FocusController controlsRef={controlsRef} request={focusRequest} registry={registry} />
         </Suspense>
 
         <OrbitControls
