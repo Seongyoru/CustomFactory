@@ -6,7 +6,9 @@
     <title>EGIS Factory · Digital Twin System</title>
 	<meta property="og:title" content="EGIS FACTORY" />
 	<meta property="og:description" content="EGIS 스마트 팩토리 프로젝트" />
-	<meta property="og:image" content="/Thumbnail.jpg" />
+	<!-- og:image 는 원래 완전한 절대 URL 이어야 스크레이퍼가 읽는다.
+	     하위 경로 배포에서 루트 절대('/…')는 확실히 깨지므로 상대로 둔다. -->
+	<meta property="og:image" content="./Thumbnail.jpg" />
   </head>
   <body>
     <div id="root"></div>

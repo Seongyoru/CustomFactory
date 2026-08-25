@@ -13,7 +13,8 @@
  * ---------------------------------------------------------------------------
  */
 
-import * as XLSX from 'xlsx';
+/* xlsx 는 큰 라이브러리라 정적으로 묶지 않는다 — 엑셀 기능을 처음 쓸 때만 내려받는다 */
+const loadXLSX = () => import('xlsx');
 
 /** 컬럼 별칭 — 소문자·공백/특수문자 제거 후 비교 */
 const COLUMN_ALIASES = {
@@ -63,6 +64,7 @@ function toNumber(v) {
  * @returns {Promise<{rows, mapping, unmatched, sheetName, missingRequired}>}
  */
 export async function parseJobWorkbook(file, existingNames = []) {
+  const XLSX = await loadXLSX();
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: 'array' });
   const sheetName = wb.SheetNames[0];
@@ -136,7 +138,8 @@ export async function parseJobWorkbook(file, existingNames = []) {
 }
 
 /** 빈 양식(.xlsx) 생성 후 다운로드 — 컬럼 형식을 글로 설명하는 것보다 확실하다 */
-export function downloadJobTemplate() {
+export async function downloadJobTemplate() {
+  const XLSX = await loadXLSX();
   const rows = [
     ['작업명', '수량', '표준시간(분)', '설비', '우선순위', '비고'],
     ['HPG 원자재 개포장', 120, 15, 'CUTTING_UNIT', 1, '예시 행 - 삭제 후 사용하세요'],

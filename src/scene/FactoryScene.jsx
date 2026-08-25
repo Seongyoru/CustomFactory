@@ -29,6 +29,7 @@ import {
   SHELL_ASSET,
   STATUS,
 } from '../data/factoryAssets.js';
+import { assetUrl } from '../lib/baseUrl.js';
 
 /* 설비 셀이 4.5×3.2×6.9m 규모라 카메라도 가깝게 잡는다 */
 const CAMERA_HOME = { position: [8.5, 5.2, 9.5], target: [0.4, 1.3, 0] };
@@ -53,8 +54,16 @@ const INACTIVE_LINE_OPACITY = 0.16;
  * GLB 를 원본 좌표 그대로 복제한다.
  * useGLTF 는 URL 별로 동일 인스턴스를 캐시하므로 반드시 clone 해서 쓴다.
  * ------------------------------------------------------------------------- */
+/**
+ * Draco 디코더 경로.
+ *  GLB 는 전부 Draco 압축돼 있다(원본 43.9MB → 18.4MB). 디코더를 CDN 이 아니라
+ *  public/draco 에 번들해 두어 폐쇄망(공장 내부망)에서도 동작한다.
+ *  모든 자산 주소는 assetUrl 로 배포 기준 경로를 붙인다 (하위 경로 배포 대응).
+ */
+const DRACO_DECODER_PATH = '/draco/';
+
 function useAssembledModel(url, { transparent = false, opacity = 1 } = {}) {
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(assetUrl(url), assetUrl(DRACO_DECODER_PATH));
 
   const result = useMemo(() => {
     const object = scene.clone(true);
@@ -103,7 +112,7 @@ function useAlphaMapOverride(object, alphaMaps) {
     const loaded = [];
 
     Object.entries(alphaMaps).forEach(([materialName, url]) => {
-      loader.load(url, (tex) => {
+      loader.load(assetUrl(url), (tex) => {
         tex.flipY = false;
         tex.colorSpace = THREE.NoColorSpace; // 색이 아니라 마스크 데이터
         loaded.push(tex);
@@ -307,8 +316,9 @@ function SelectableModel({
     <>
       {/* 선택 시 객체 옆에 뜨는 이동 피벗(기즈모).
           드래그 중에는 OrbitControls 가 자동으로 잠깁니다(makeDefault 연동).
-          상태 반영은 드래그가 끝날 때 한 번만 해서 프레임마다 리렌더되는 걸 막습니다. */}
-      {selected && mounted && (
+          상태 반영은 드래그가 끝날 때 한 번만 해서 프레임마다 리렌더되는 걸 막습니다.
+          onMove 가 없으면(배치 조정 권한 없음) 기즈모 자체를 띄우지 않는다. */}
+      {selected && mounted && Boolean(onMove) && (
         <TransformControls
           object={groupRef}
           mode="translate"
@@ -407,7 +417,7 @@ function LineGroup({
   /* 기즈모가 돌려주는 값은 월드 좌표다. 저장값은 라인 원점을 뺀 '라인 기준 좌표'라
      라인마다 같은 기준으로 배치를 기록한다(배치 자체는 라인별로 따로 보관한다). */
   const handleMove = (id, [x, y, z]) =>
-    onMove(id, [+(x - ox).toFixed(2), +(y - oy).toFixed(2), +(z - oz).toFixed(2)]);
+    onMove?.(id, [+(x - ox).toFixed(2), +(y - oy).toFixed(2), +(z - oz).toFixed(2)]);
 
   return (
     <>
@@ -421,7 +431,7 @@ function LineGroup({
             offset={placed}
             selected={selectedId === asset.id}
             onSelect={onSelect}
-            onMove={handleMove}
+            onMove={onMove ? handleMove : null}
             onDragChange={onDragChange}
             accentHex={accentHex}
             clock={clock}
@@ -784,6 +794,8 @@ export default function FactoryScene({
 }
 
 /* 최초 인터랙션 전에 미리 받아두면 클릭 체감이 훨씬 좋아진다 */
-[SHELL_ASSET, ...FACTORY_ASSETS].forEach((a) => useGLTF.preload(a.file));
+[SHELL_ASSET, ...FACTORY_ASSETS].forEach((a) =>
+  useGLTF.preload(assetUrl(a.file), assetUrl(DRACO_DECODER_PATH))
+);
 
 export { CAMERA_HOME };

@@ -6,6 +6,10 @@ import tailwindcss from '@tailwindcss/vite';
 const port = Number(process.env.PORT) || 5173;
 
 export default defineConfig({
+  /* 상대 경로 빌드 — 도메인 루트든 GitHub Pages 하위 경로든 그대로 동작한다.
+     저장소 이름을 여기 박지 않는다(이름이 바뀌면 깨진다). 코드의 자산 주소는
+     src/lib/baseUrl.js 의 assetUrl 이 이 base 를 실행 시점에 붙인다. */
+  base: './',
   plugins: [react(), tailwindcss()],
   server: {
     port,
