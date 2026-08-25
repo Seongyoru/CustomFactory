@@ -9,7 +9,7 @@
  *  표준시간 = 수량 × 품목 택트타임(초/EA). 라인은 대기열 맨 위 로트부터 흘린다.
  * ---------------------------------------------------------------------------
  */
-import { CYLINDER_CAPACITY, FACTORY_ASSETS, PRODUCTION_LINES } from './factoryAssets.js';
+import { CYLINDER_CAPACITY, FACTORY_ASSETS, PRODUCTION_LINES, lotTotalSec } from './factoryAssets.js';
 
 /**
  * 로트 번호 발번.
@@ -32,14 +32,18 @@ export const INITIAL_PRODUCT_CATALOG = [
   { id: 'PRD-04', name: 'HPG 카트리지 리필', taktSec: 6.3, defaultQty: 240 },
 ];
 
-/** 품목 + 수량 → 로트. id 는 호출부에서 발번해서 넣는다. */
+/**
+ * 품목 + 수량 → 로트. id 는 호출부에서 발번해서 넣는다.
+ *  표준시간은 단순 택트×수량이 아니라 애니메이션 타임라인에서 유도한다
+ *  (도입·마무리 포함 — lotTotalSec 참조). 공정 완료 = 애니메이션 완료.
+ */
 export const makeLot = (id, product, qty, state = 'IDLE') => ({
   id,
   productId: product.id ?? null,
   name: product.name,
   qty,
   taktSec: product.taktSec,
-  totalSec: Math.max(1, Math.round(product.taktSec * qty)),
+  totalSec: lotTotalSec(qty, product.taktSec),
   state,
 });
 
@@ -77,13 +81,13 @@ export const INITIAL_OFFSETS_BY_LINE = Object.fromEntries(
 
 /**
  * 실린더 만충 상태 — 순수 함수.
- *  1세트 = 실린더 1회 충전. 누적 세트 수(완료 로트 EA + 현재 로트 진행분)에서
- *  유도하므로 별도 카운터 없이 엔진 상태와 항상 일치한다.
- *   채움 = 누적 % 용량 · 반출 실린더 = 누적 ÷ 용량
+ *  1 EA 충전마다 1/4씩 차고 4회에 만충·반출된다. 누적 충전 수
+ *  (완료 로트 EA + 현재 로트에서 이미 충전 완료된 EA — completedEaAt 로
+ *  도입/마무리 구간을 EA 로 오인하지 않게 계산)에서 유도하므로
+ *  별도 카운터 없이 엔진 상태와 항상 일치한다.
  */
-export const computeCylinder = (produced, elapsedSec, taktSec, hasLot) => {
-  const inCycle = hasLot && taktSec > 0 ? Math.floor(elapsedSec / taktSec) : 0;
-  const cum = Math.max(0, (produced ?? 0)) + inCycle;
+export const computeCylinder = (produced, doneEaInLot, hasLot) => {
+  const cum = Math.max(0, produced ?? 0) + Math.max(0, doneEaInLot ?? 0);
   return {
     fill: cum % CYLINDER_CAPACITY,
     capacity: CYLINDER_CAPACITY,

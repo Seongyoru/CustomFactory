@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Settings2, Trash2, Upload, X,
 } from 'lucide-react';
+import { completedEaAt } from '../../data/factoryAssets.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
@@ -49,7 +50,8 @@ const LeftDashboardPanel = ({
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
   const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? null;
   const targetQty = jobs.reduce((sum, j) => sum + j.qty, 0);
-  const doneQty = currentJob ? Math.round(currentJob.qty * (progress / 100)) : 0;
+  /* 진행 EA — 도입/마무리 애니메이션 구간을 수량으로 오인하지 않는 정확한 카운트 */
+  const doneQty = currentJob ? completedEaAt(elapsed, currentJob.qty, taktSec) : 0;
 
   /* 시뮬레이션 배속을 반영한 시간당 처리량 — 배속을 올리면 즉시 뛴다 */
   const simSpeed = mode === 'simulation' ? speed : 1;

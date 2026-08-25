@@ -16,6 +16,8 @@
  * ---------------------------------------------------------------------------
  */
 
+import { lotTotalSec } from '../data/factoryAssets.js';
+
 /* xlsx 는 큰 라이브러리라 정적으로 묶지 않는다 — 엑셀 기능을 처음 쓸 때만 내려받는다 */
 const loadXLSX = () => import('xlsx');
 
@@ -128,7 +130,8 @@ export async function parseJobWorkbook(file, products = []) {
       name,
       qty: qty ?? 0,
       taktSec: taktSec ?? 0,
-      totalSec: taktSec && qty ? Math.max(1, Math.round(taktSec * qty)) : 0,
+      /* 표준시간 = 애니메이션 유도 (도입·마무리 포함) — makeLot 과 같은 공식 */
+      totalSec: taktSec && qty ? lotTotalSec(qty, taktSec) : 0,
       knownProduct: Boolean(catalogHit),
       priority: mapping.priority !== undefined ? toNumber(raw[mapping.priority]) : null,
       note: mapping.note !== undefined ? String(raw[mapping.note] ?? '').trim() : '',

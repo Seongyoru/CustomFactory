@@ -8,7 +8,9 @@ import {
   Grid3x3, Layers, Maximize2, Move3d, RotateCcw, Video, Workflow,
 } from 'lucide-react';
 import FactoryScene, { CAMERA_HOME } from '../../scene/FactoryScene.jsx';
-import { PROCESS_CYCLE_SEC, PROCESS_PHASES, SELECTABLE_ASSETS, findLine } from '../../data/factoryAssets.js';
+import {
+  CONVEYOR_LOAD_MAX, SELECTABLE_ASSETS, cycleSecFor, findLine, processPhasesFor,
+} from '../../data/factoryAssets.js';
 import { CCTV_FEEDS } from '../../data/jobs.js';
 import {
   fmtAnimScale, fmtClock, fmtDate, fmtDuration, fmtSec, fmtSpeed,
@@ -21,10 +23,13 @@ import CctvVideo from '../CctvVideo.jsx';
  */
 const Scene = React.memo(FactoryScene);
 
-const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused }) => {
+const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused, repeats = CONVEYOR_LOAD_MAX }) => {
   const [open, setOpen] = useState(true);
-  const pct = (t) => `${(t / PROCESS_CYCLE_SEC) * 100}%`;
-  const active = PROCESS_PHASES.filter((p) => processTime >= p.start && processTime <= p.end);
+  /* 사이클 길이·단계는 현재 로드의 적재 수(반복 횟수)에 따라 달라진다 */
+  const cycleSec = cycleSecFor(repeats);
+  const phases = processPhasesFor(repeats);
+  const pct = (t) => `${(t / cycleSec) * 100}%`;
+  const active = phases.filter((p) => processTime >= p.start && processTime <= p.end);
 
   return (
     <div className={`w-[384px] rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
@@ -49,7 +54,7 @@ const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused }) => {
 
       {open && (
         <div className="relative p-2 space-y-1">
-          {PROCESS_PHASES.map((p) => {
+          {phases.map((p) => {
             const on = processTime >= p.start && processTime <= p.end;
             return (
               <div key={`${p.id}-${p.label}`} className="flex items-center gap-2">
@@ -325,6 +330,7 @@ const TwinViewport = ({
               processTime={processTime}
               animTimeScale={animTimeScale}
               paused={animPaused}
+              repeats={animByLine?.[activeLineId]?.repeats}
             />
           </div>
 

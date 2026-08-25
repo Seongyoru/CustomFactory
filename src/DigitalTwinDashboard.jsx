@@ -28,11 +28,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertOctagon } from 'lucide-react';
 
 import {
+  CLIP_FPS,
+  CONVEYOR_LOAD_MAX,
   FAULT_SCENARIOS,
-  FILL_REPEATS,
-  PROCESS_CYCLE_SEC,
   PRODUCTION_LINES,
+  REPEAT_PERIOD_F,
   SELECTABLE_ASSETS,
+  completedEaAt,
+  currentLoadAt,
   findAsset,
 } from './data/factoryAssets.js';
 import {
@@ -222,26 +225,41 @@ export default function DigitalTwinDashboard() {
    *  엑셀 업로드로 택트가 극단적인 작업이 들어와도 눈으로 볼 수 있게 비율을 제한한다.
    *  비상 정지된 라인은 paused 로 그 자리에 멈춘다.
    */
-  /* 애니메이션 1사이클 = 충전 8회(실린더 1개) = 8세트 → 8×택트에 맞춰 재생한다 */
+  /* 원자재 1개 처리(76f)가 실시간으로 택트 1개가 되도록 재생 속도를 맞춘다.
+     이러면 로드 전체(도입+반복 n회+마무리)의 애니메이션 시간이 lotTotalSec 와
+     정확히 일치한다 — 공정 완료 = 애니메이션 완료. */
+  const EA_PERIOD_CLIP_SEC = REPEAT_PERIOD_F / CLIP_FPS; // 2.53s — 클립상 EA 1개 주기
   const taktOf = (job) =>
-    job?.taktSec > 0 ? job.taktSec : job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC / FILL_REPEATS;
+    job?.taktSec > 0 ? job.taktSec : job && job.qty > 0 ? job.totalSec / job.qty : EA_PERIOD_CLIP_SEC;
   const scaleOf = (takt) =>
-    Math.min(4, Math.max(0.1, PROCESS_CYCLE_SEC / (takt * FILL_REPEATS))) * (mode === 'simulation' ? speed : 1);
+    Math.min(4, Math.max(0.05, EA_PERIOD_CLIP_SEC / takt)) * (mode === 'simulation' ? speed : 1);
 
-  /* 대기열이 빈 라인은 설비도 멈춘다 — 지시 없는 라인이 도는 건 부자연스럽다 */
+  /* 대기열이 빈 라인은 설비도 멈춘다 — 지시 없는 라인이 도는 건 부자연스럽다.
+     repeats = 현재 로드의 적재 수(최대 20, 로트 잔여만큼) — 애니메이션 반복 횟수.
+     경과시간에 따라 로드가 넘어갈 때만 값이 바뀌므로 문자열 키로 참조를 고정해
+     씬 memo 가 매초 깨지지 않게 한다. */
+  const repeatsKey = PLANTS.map((line) => {
+    const head = jobsByLine[line.id]?.[0] ?? null;
+    return head
+      ? currentLoadAt(elapsedByLine[line.id] ?? 0, head.qty, taktOf(head)).repeats
+      : CONVEYOR_LOAD_MAX;
+  }).join(',');
   const animByLine = useMemo(
-    () =>
-      Object.fromEntries(
-        PLANTS.map((line) => [
+    () => {
+      const repeats = repeatsKey.split(',');
+      return Object.fromEntries(
+        PLANTS.map((line, i) => [
           line.id,
           {
             timeScale: scaleOf(taktOf(jobsByLine[line.id]?.[0] ?? null)),
             paused: Boolean(eStopByLine[line.id]) || (jobsByLine[line.id]?.length ?? 0) === 0,
+            repeats: Number(repeats[i]) || CONVEYOR_LOAD_MAX,
           },
         ])
-      ),
+      );
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [jobsByLine, eStopByLine, mode, speed]
+    [jobsByLine, eStopByLine, mode, speed, repeatsKey]
   );
 
   /* 좌측 패널·HUD·푸터에 숫자로 보여주는 값은 선택된 라인 기준 */
@@ -261,12 +279,10 @@ export default function DigitalTwinDashboard() {
    */
   const cylinderOf = (lineId) => {
     const head = jobsByLine[lineId]?.[0] ?? null;
-    return computeCylinder(
-      lineStats[lineId]?.produced,
-      elapsedByLine[lineId] ?? 0,
-      taktOf(head),
-      Boolean(head)
-    );
+    const doneEa = head
+      ? completedEaAt(elapsedByLine[lineId] ?? 0, head.qty, taktOf(head))
+      : 0;
+    return computeCylinder(lineStats[lineId]?.produced, doneEa, Boolean(head));
   };
   const cylinder = useMemo(
     () => cylinderOf(plant),

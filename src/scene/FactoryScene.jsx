@@ -23,12 +23,13 @@ import { Grid, Html, OrbitControls, TransformControls, useGLTF, useProgress } fr
 import * as THREE from 'three';
 import {
   ANIMATION_CLIP,
+  CONVEYOR_LOAD_MAX,
   FACTORY_ASSETS,
   PRODUCTION_LINES,
-  PROCESS_CYCLE_SEC,
   SHELL_ASSET,
   STATUS,
   clipTimeFor,
+  cycleSecFor,
 } from '../data/factoryAssets.js';
 import { assetUrl } from '../lib/baseUrl.js';
 
@@ -153,7 +154,9 @@ function advanceProcessClock(clock, state, delta) {
   if (clock.stamp === stamp) return; // 이번 프레임엔 이미 누군가 전진시킴
   clock.stamp = stamp;
   if (clock.paused) return;
-  clock.time = (clock.time + delta * clock.timeScale) % PROCESS_CYCLE_SEC;
+  /* 사이클 길이는 현재 로드의 적재 수에 따라 달라진다 (185+76n 프레임) */
+  const cycle = clock.cycleSec ?? cycleSecFor(CONVEYOR_LOAD_MAX);
+  clock.time = (clock.time + delta * clock.timeScale) % cycle;
 }
 
 function useProcessAnimation(object, animations, clock, assetId) {
@@ -194,9 +197,9 @@ function useProcessAnimation(object, animations, clock, assetId) {
 
   useFrame((state, delta) => {
     advanceProcessClock(clock, state, delta);
-    /* 라인 사이클 시각을 설비별 클립 시각으로 매핑한다 — ANIMATION_SCHEDULE 이
-       도착·반복(충전 8회)·반출·출발 세그먼트를 정의한다 (factoryAssets 참조) */
-    if (mixer) mixer.setTime(clipTimeFor(assetId, clock.time));
+    /* 라인 사이클 시각을 설비별 클립 시각으로 매핑한다 — scheduleFor(적재 수)가
+       도착·반복·실린더 반출·출발 세그먼트를 정의한다 (factoryAssets 참조) */
+    if (mixer) mixer.setTime(clipTimeFor(assetId, clock.time, clock.repeats ?? CONVEYOR_LOAD_MAX));
   });
 
   return Boolean(mixer);
@@ -947,6 +950,8 @@ export default function FactoryScene({
     const anim = animByLine[l.id];
     clock.timeScale = anim?.timeScale ?? 1;
     clock.paused = Boolean(anim?.paused);
+    clock.repeats = anim?.repeats ?? CONVEYOR_LOAD_MAX; // 현재 로드 적재 수
+    clock.cycleSec = cycleSecFor(clock.repeats);
   });
   const activeClock = clocksRef.current[activeLineId] ?? clocksRef.current[PRODUCTION_LINES[0].id];
 

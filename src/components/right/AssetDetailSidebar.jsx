@@ -8,30 +8,34 @@ import {
   ChevronDown, Cpu, GitCommitHorizontal, Save, Siren, StickyNote, Wrench, X,
 } from 'lucide-react';
 import {
-  CLIP_FPS, CYCLE_FRAMES, FILL_REPEATS, PROCESS_CYCLE_SEC, SELECTABLE_ASSETS, STATUS, busyFramesOf,
+  CLIP_FPS, CONVEYOR_LOAD_MAX, CYLINDER_CAPACITY, SELECTABLE_ASSETS, STATUS,
+  busyFramesOf, cycleFramesFor, cycleSecFor,
 } from '../../data/factoryAssets.js';
 import { fmtClock, fmtDate, fmtKoDateTime } from '../../lib/format.js';
 import { ConsumableBar, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 import TelemetryPanel from './TelemetryPanel.jsx';
 
 /**
- * 병목 분석 — 라인 1사이클(실린더 1개 = 충전 8회, ANIMATION_SCHEDULE 기준)에서
+ * 병목 분석 — 컨베이어 만재(20개) 로드 1사이클(scheduleFor 기준)에서
  * 각 설비의 실가동 시간(반복 포함)을 비교해 병목을 판정한다.
  *  이 라인은 전 설비가 한 사이클로 묶인 흐름 생산이라 설비 단독 시뮬레이션은
  *  성립하지 않는다 — 대신 "누가 사이클을 가장 오래 일하는가"가 유효한 질문이다.
  */
 const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
-  const myBusyF = busyFramesOf(asset.id);
+  /* 만재(20개) 로드 기준으로 비교한다 — 반복이 많을수록 반복 설비의 점유가 정확해진다 */
+  const N = CONVEYOR_LOAD_MAX;
+  const cycleF = cycleFramesFor(N);
+  const myBusyF = busyFramesOf(asset.id, N);
   if (!(myBusyF > 0)) return null;
 
   const busyList = SELECTABLE_ASSETS.map((a) => ({
     id: a.id,
     name: a.nameKo,
-    busyF: busyFramesOf(a.id),
+    busyF: busyFramesOf(a.id, N),
   })).sort((a, b) => b.busyF - a.busyF);
   const maxBusyF = busyList[0].busyF;
   const isBottleneck = myBusyF === maxBusyF;
-  const share = myBusyF / CYCLE_FRAMES;
+  const share = myBusyF / cycleF;
   const busySec = myBusyF / CLIP_FPS;
 
   return (
@@ -40,7 +44,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
         icon={GitCommitHorizontal}
         title="병목 분석"
         theme={theme}
-        hint="라인 1사이클(실린더 1개 = 충전 8회) 동안 각 설비가 실제로 움직이는 시간을 반복 횟수까지 포함해 비교합니다. 가장 오래 일하는 설비가 라인 속도를 결정하는 병목입니다."
+        hint="컨베이어 만재(20개) 로드 1사이클 동안 각 설비가 실제로 움직이는 시간을 반복 횟수까지 포함해 비교합니다. 가장 오래 일하는 설비가 라인 속도를 결정하는 병목입니다."
         right={
           isBottleneck ? (
             <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-red-500/40 bg-red-500/10 text-red-500">
@@ -59,7 +63,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
           {[
             ['사이클 점유', `${Math.round(share * 100)}%`],
             ['실가동', `${busySec.toFixed(1)}s`],
-            ['사이클', `${PROCESS_CYCLE_SEC.toFixed(1)}s`],
+            ['사이클', `${cycleSecFor(N).toFixed(1)}s`],
           ].map(([k, v]) => (
             <div key={k}>
               <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
@@ -77,7 +81,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
               <div
                 key={b.id}
                 className="flex items-center gap-2"
-                title={`${b.name} · 실가동 ${(b.busyF / CLIP_FPS).toFixed(1)}s (사이클의 ${Math.round((b.busyF / CYCLE_FRAMES) * 100)}%)`}
+                title={`${b.name} · 실가동 ${(b.busyF / CLIP_FPS).toFixed(1)}s (사이클의 ${Math.round((b.busyF / cycleF) * 100)}%)`}
               >
                 <span className={`w-[74px] shrink-0 text-[9px] truncate ${isMine ? `font-bold ${theme.textPrimary}` : theme.textFaint}`}>
                   {b.name}
@@ -86,7 +90,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
                   <span
                     className="absolute inset-y-0 left-0 rounded-sm"
                     style={{
-                      width: `${(b.busyF / CYCLE_FRAMES) * 100}%`,
+                      width: `${(b.busyF / cycleF) * 100}%`,
                       backgroundColor: isBn ? '#ef4444' : theme.accentHex,
                       opacity: isMine ? 1 : 0.3,
                     }}
@@ -101,7 +105,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
         </div>
 
         <p className={`text-[10px] leading-relaxed tabular-nums ${theme.textGhost}`}>
-          실린더 1개 = 충전 {FILL_REPEATS}회 ≈ 현재 로트 기준 {(lineTaktSec * FILL_REPEATS).toFixed(0)}초.
+          실린더 1개 = 충전 {CYLINDER_CAPACITY}회 ≈ 현재 로트 기준 {(lineTaktSec * CYLINDER_CAPACITY).toFixed(0)}초.
           병목 설비의 가동 시간을 줄여야 라인 전체가 빨라집니다.
         </p>
       </div>
@@ -111,7 +115,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
 
 const AssetDetailSidebar = ({
   theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo,
-  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry, lineTaktSec = PROCESS_CYCLE_SEC,
+  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry, lineTaktSec = 2.53,
   cylinder,
 }) => {
   const [memoDraft, setMemoDraft] = useState('');

@@ -5,6 +5,7 @@
  */
 import React, { useState } from 'react';
 import { Package, Plus, X } from 'lucide-react';
+import { lotTotalSec } from '../../data/factoryAssets.js';
 import { fmtDuration, fmtKoDuration } from '../../lib/format.js';
 import { GhostButton, Modal } from '../ui.jsx';
 
@@ -15,7 +16,8 @@ const JobAddModal = ({ theme, products, onAddProduct, onAddLot, onClose }) => {
   const [error, setError] = useState('');
 
   const selected = products.find((p) => p.id === selectedId) ?? null;
-  const totalSec = selected ? Math.round(selected.taktSec * qty) : 0;
+  /* 표준시간 = 애니메이션 유도 (도입·마무리 포함) — 공정 완료 = 애니메이션 완료 */
+  const totalSec = selected ? lotTotalSec(qty, selected.taktSec) : 0;
 
   const pick = (product) => {
     setSelectedId(product.id);
@@ -109,7 +111,7 @@ const JobAddModal = ({ theme, products, onAddProduct, onAddLot, onClose }) => {
           {selected && (
             <p className={`mt-2 text-[11px] tabular-nums ${theme.textFaint}`}>
               표준시간 <b className={theme.textSecondary}>{fmtDuration(totalSec)}</b>
-              <span className={theme.textGhost}> = {qty} EA × {selected.taktSec}s</span>
+              <span className={theme.textGhost}> · 택트 {selected.taktSec}s/EA + 도입·마무리 포함</span>
               <span className={`ml-2 ${theme.textGhost}`}>(약 {fmtKoDuration(totalSec)})</span>
             </p>
           )}

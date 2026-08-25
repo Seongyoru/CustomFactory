@@ -14,9 +14,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 const NS = 'egis-dt';
-/* v2: 작업 대기열이 공정 단위 작업 → 로트(품목+수량) 모델로 전면 개편됨.
-   v1 데이터(taktSec 없는 작업, 작업명 기반 단계 분류)는 새 화면과 호환되지 않는다. */
-const VERSION = 'v2';
+/* v3: 표준시간이 택트×수량 → 애니메이션 유도(도입·마무리 포함)로 바뀌고
+   실린더 용량이 4회 완충으로 확정됨. v2 로트의 totalSec 은 새 의미와 어긋난다. */
+const VERSION = 'v3';
 const keyOf = (key) => `${NS}.${VERSION}.${key}`;
 
 export function readStore(key, fallback) {
