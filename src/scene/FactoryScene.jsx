@@ -508,6 +508,21 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
   const prevFocus = useRef(focusRequest);
   const animRef = useRef(null);
 
+  /**
+   * 도착 후 자동 회전(시네마틱 오빗).
+   *  라인 이동이 끝나면 새 라인을 중심으로 천천히 돌기 시작하고,
+   *  사용자가 화면을 잡는 순간('start' 이벤트) 바로 멈춰 조작을 방해하지 않는다.
+   */
+  useEffect(() => {
+    const controls = controlsRef?.current;
+    if (!controls) return undefined;
+    const stopAutoRotate = () => {
+      controls.autoRotate = false;
+    };
+    controls.addEventListener('start', stopAutoRotate);
+    return () => controls.removeEventListener('start', stopAutoRotate);
+  }, [controlsRef]);
+
   useEffect(() => {
     const from = prevOrigin.current;
     prevOrigin.current = origin;
@@ -530,11 +545,13 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
     }
 
     if (focusTookOver) {
+      controls.autoRotate = false; // 카메라는 FocusController 가 설비로 끌고 간다
       controls.object.position.add(delta);
       controls.target.add(delta);
       controls.update();
       return;
     }
+    controls.autoRotate = false; // 무빙 중에는 끄고, 도착하면 다시 켠다
 
     /* 일반 라인 전환 — 0.9초 ease-in-out 무빙. 타깃도 같이 옮기므로
        도착한 뒤의 회전(OrbitControls)은 새 라인 중심을 기준으로 돈다. */
@@ -552,7 +569,14 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
       controls.object.position.lerpVectors(startPos, endPos, e);
       controls.target.lerpVectors(startTgt, endTgt, e);
       controls.update();
-      animRef.current = k < 1 ? requestAnimationFrame(step) : null;
+      if (k < 1) {
+        animRef.current = requestAnimationFrame(step);
+      } else {
+        animRef.current = null;
+        /* 도착 — 새 라인을 중심으로 천천히 자동 회전 시작 (드래그하면 멈춘다) */
+        controls.autoRotateSpeed = 0.6;
+        controls.autoRotate = true;
+      }
     };
     animRef.current = requestAnimationFrame(step);
 

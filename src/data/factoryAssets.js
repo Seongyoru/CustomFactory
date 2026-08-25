@@ -240,8 +240,8 @@ export const findAsset = (id) => FACTORY_ASSETS.find((a) => a.id === id) ?? null
  * ------------------------------------------------------------------------- */
 export const LINE_GAP_Z = 10;
 export const PRODUCTION_LINES = [
-  { id: 'L1', name: 'DM뷰 - Line_1', origin: [0, 0, 0] },
-  { id: 'L2', name: 'DM뷰 - Line_2', origin: [0, 0, -LINE_GAP_Z] },
+  { id: 'L1', name: 'Line_1', origin: [0, 0, 0] },
+  { id: 'L2', name: 'Line_2', origin: [0, 0, -LINE_GAP_Z] },
 ];
 export const findLine = (id) => PRODUCTION_LINES.find((l) => l.id === id) ?? PRODUCTION_LINES[0];
 

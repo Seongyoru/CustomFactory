@@ -3,7 +3,7 @@
  *  우측 사이드바 — 설비 상세 (기본 정보 / 점검 이력 / 시뮬레이션 제어 / 메모)
  * =============================================================================
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ChevronDown, Clock, Cpu, Pause, Play, Save, Siren, StickyNote, Wrench, X,
 } from 'lucide-react';
@@ -17,9 +17,54 @@ const AssetDetailSidebar = ({
   memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry,
 }) => {
   const [simCount, setSimCount] = useState(100);
-  const [simRunning, setSimRunning] = useState(false);
   const [memoDraft, setMemoDraft] = useState('');
   const [historyOpen, setHistoryOpen] = useState(true);
+
+  /**
+   * 설비 단독 가상 실행.
+   *  시작을 누르면 이 설비의 사이클을 지정 횟수만큼 '가상으로 고속 실행'해서
+   *  예상 생산량·불량·소요 시간을 결과로 보여준다. 실제 라인 상태는 건드리지
+   *  않는 예측 도구다 — 몇 초짜리 진행 후 결과 카드가 나온다.
+   */
+  const [simRun, setSimRun] = useState(null); // null | {progress} | {done, result}
+  const simTimerRef = useRef(null);
+
+  const startSim = () => {
+    if (!asset) return;
+    clearInterval(simTimerRef.current);
+    const DURATION_MS = 3500;
+    const t0 = Date.now();
+    const count = simCount;
+    const cycleSec = asset.cycleSec;
+    setSimRun({ progress: 0 });
+    simTimerRef.current = setInterval(() => {
+      const k = Math.min(1, (Date.now() - t0) / DURATION_MS);
+      if (k >= 1) {
+        clearInterval(simTimerRef.current);
+        setSimRun({
+          done: true,
+          result: {
+            cycles: count,
+            qty: count, // 1사이클 = 제품 1개 기준
+            defects: Math.round(count * Math.random() * 0.02),
+            totalSec: cycleSec * count,
+          },
+        });
+      } else {
+        setSimRun({ progress: k });
+      }
+    }, 80);
+  };
+  const stopSim = () => {
+    clearInterval(simTimerRef.current);
+    setSimRun(null);
+  };
+  /* 설비를 바꾸거나 패널이 닫히면 실행 중이던 가상 실행은 버린다 */
+  useEffect(() => {
+    clearInterval(simTimerRef.current);
+    setSimRun(null);
+  }, [asset?.id]);
+  useEffect(() => () => clearInterval(simTimerRef.current), []);
 
   /* 사이클타임 × 횟수 = 총 소요 시간. 완료 '시각'과 걸리는 '시간'을 함께 보여준다. */
   const simTotalSec = asset ? asset.cycleSec * simCount : 0;
@@ -187,6 +232,7 @@ const AssetDetailSidebar = ({
               icon={Activity}
               title="시뮬레이션 제어"
               theme={theme}
+              hint="이 설비의 사이클을 지정 횟수만큼 가상으로 고속 실행해 예상 생산량·불량·소요 시간을 예측합니다. 실제 라인 상태에는 영향이 없습니다."
               right={<span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>{mode === 'simulation' ? 'READY' : 'LIVE 잠금'}</span>}
             />
             <div className="p-3 space-y-3">
@@ -221,25 +267,65 @@ const AssetDetailSidebar = ({
                 </p>
               </div>
 
+              {/* 실행 중 — 진행바 */}
+              {simRun && !simRun.done && (
+                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className={theme.textMuted}>가상 실행 중…</span>
+                    <span className={`font-bold tabular-nums ${theme.accentText}`}>
+                      {Math.round(simRun.progress * 100)}%
+                    </span>
+                  </div>
+                  <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
+                    <div
+                      className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
+                      style={{ width: `${simRun.progress * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* 완료 — 예측 결과 */}
+              {simRun?.done && (
+                <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
+                  <p className={`text-[11px] font-bold ${theme.accentText}`}>가상 실행 결과 (예측)</p>
+                  <dl className="mt-1.5 grid grid-cols-3 gap-1.5 text-center">
+                    {[
+                      ['생산량', `${simRun.result.qty} EA`],
+                      ['예상 불량', `${simRun.result.defects} EA`],
+                      ['실소요 예상', fmtKoDuration(simRun.result.totalSec)],
+                    ].map(([k, v]) => (
+                      <div key={k}>
+                        <dt className={`text-[10px] ${theme.textFaint}`}>{k}</dt>
+                        <dd className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className={`mt-1.5 text-[10px] ${theme.textGhost}`}>
+                    Cycle {simRun.result.cycles}회 기준 예측입니다. 실제 라인 상태에는 영향이 없습니다.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setSimRunning(true)}
-                  disabled={mode !== 'simulation' || simRunning}
+                  onClick={startSim}
+                  disabled={mode !== 'simulation' || Boolean(simRun && !simRun.done)}
                   className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
                     text-white transition ${theme.accentBg} hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
                 >
-                  <Play className="w-4 h-4" /> 시작
+                  <Play className="w-4 h-4" /> {simRun?.done ? '다시 실행' : '시작'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSimRunning(false)}
-                  disabled={!simRunning}
+                  onClick={stopSim}
+                  disabled={!simRun}
                   className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
                     border ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg} transition
                     disabled:opacity-30 disabled:cursor-not-allowed`}
                 >
-                  <Pause className="w-4 h-4" /> 중지
+                  <Pause className="w-4 h-4" /> {simRun?.done ? '결과 지우기' : '중지'}
                 </button>
               </div>
             </div>

@@ -29,7 +29,7 @@ const TONE_CHIP = {
   slate: '',
 };
 
-const lineName = (id) => PRODUCTION_LINES.find((l) => l.id === id)?.name.replace('DM뷰 - ', '') ?? id ?? '-';
+const lineName = (id) => PRODUCTION_LINES.find((l) => l.id === id)?.name ?? id ?? '-';
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
 
 /** 이벤트 구분 칩 */

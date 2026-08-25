@@ -33,11 +33,12 @@ const DARK_BASE = {
    *  두고 이게 비쳐 보인다(three 만으로 그라데이션을 만들면 지오메트리가 필요해진다).
    *  fog 는 그라데이션의 중간 톤과 맞춰야 원경이 배경에 자연스럽게 녹는다.
    */
+  /* 배경은 무채색(채도 0) 그레이 그라데이션 — 설비·상태 색이 더 또렷하게 선다 */
   scene: {
-    bg: '#101b30',
-    bgGradient: 'linear-gradient(180deg, #24344f 0%, #131f36 55%, #0b1526 100%)',
-    fog: '#16233c',
-    gridCell: '#2c3c58',
+    bg: '#1c1c1c',
+    bgGradient: 'linear-gradient(180deg, #3a3a3a 0%, #202020 55%, #141414 100%)',
+    fog: '#242424',
+    gridCell: '#464646',
   },
 };
 
@@ -58,10 +59,10 @@ const LIGHT_BASE = {
   overlayBg: 'bg-white/85',
   cardBg: 'bg-slate-50',
   scene: {
-    bg: '#dfe6ef',
-    bgGradient: 'linear-gradient(180deg, #f5f8fc 0%, #e2e9f2 55%, #ccd7e5 100%)',
-    fog: '#e0e7f0',
-    gridCell: '#a8b6c8',
+    bg: '#e4e4e4',
+    bgGradient: 'linear-gradient(180deg, #f6f6f6 0%, #e6e6e6 55%, #d4d4d4 100%)',
+    fog: '#e4e4e4',
+    gridCell: '#b0b0b0',
   },
 };
 

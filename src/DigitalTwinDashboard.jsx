@@ -114,12 +114,12 @@ export default function DigitalTwinDashboard() {
   const [expandedCam, setExpandedCam] = useState(null);
   const [reportModal, setReportModal] = useState(false);
 
-  /* 튜토리얼 — 처음 로그인한 브라우저에서 한 번 자동 실행, 이후엔 메뉴에서 재실행 */
-  const [tutorialDone, setTutorialDone] = usePersistentState('tutorialDone', false);
+  /* 튜토리얼 — 로그인(또는 세션이 살아있는 재접속)마다 자동 실행.
+     건너뛰면 그 세션 동안만 닫히고, 프로필 메뉴에서 언제든 다시 볼 수 있다. */
   const [tutorialOpen, setTutorialOpen] = useState(false);
   useEffect(() => {
-    if (session && !tutorialDone) setTutorialOpen(true);
-  }, [session, tutorialDone]);
+    if (session) setTutorialOpen(true);
+  }, [session]);
 
   /* 라인별 설비 배치 오프셋 / 설비별 메모(라인 공용 — 설비 마스터가 공용이라) */
   const [offsetsByLine, setOffsetsByLine] = usePersistentState('offsetsByLine', INITIAL_OFFSETS_BY_LINE);
@@ -579,7 +579,7 @@ export default function DigitalTwinDashboard() {
           {stoppedLines.length > 0 && (
             <span className="flex items-center gap-1.5 font-semibold text-red-500">
               <AlertOctagon className="w-3 h-3" />
-              E-STOP {stoppedLines.map((l) => l.name.replace('DM뷰 - ', '')).join(' · ')}
+              E-STOP {stoppedLines.map((l) => l.name).join(' · ')}
             </span>
           )}
         </div>
@@ -645,15 +645,9 @@ export default function DigitalTwinDashboard() {
         <CctvModal theme={theme} cam={expandedCam} now={now} onClose={() => setExpandedCam(null)} />
       )}
 
-      {/* 튜토리얼 — 완료/건너뛰기 시 저장되어 다시 자동으로 뜨지 않는다 */}
+      {/* 튜토리얼 — 로그인마다 자동으로 뜨고, 닫으면 이번 세션 동안만 닫힌다 */}
       {tutorialOpen && (
-        <TutorialOverlay
-          theme={theme}
-          onClose={() => {
-            setTutorialOpen(false);
-            setTutorialDone(true);
-          }}
-        />
+        <TutorialOverlay theme={theme} onClose={() => setTutorialOpen(false)} />
       )}
 
       {reportModal && (
