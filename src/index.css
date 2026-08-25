@@ -65,6 +65,62 @@ body {
   }
 }
 
+/* -----------------------------------------------------------------------
+ * 실린더 만충 반출 토스트
+ *  3D 카트 위(drei Html)에서 떠올랐다 사라진다. 라이트/다크 공용으로
+ *  에메랄드 고정 색을 쓴다 — '완료' 상태 색(STATUS.RUNNING)과 같은 계열.
+ * --------------------------------------------------------------------- */
+@keyframes discharge-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.97);
+  }
+}
+
+.discharge-toast {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.92); /* emerald-500 */
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: discharge-rise 2.6s ease-out forwards;
+}
+.discharge-toast-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+.discharge-toast-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discharge-toast {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* number input 의 기본 스피너 제거 (시뮬레이션 횟수 입력용) */
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {

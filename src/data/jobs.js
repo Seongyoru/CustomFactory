@@ -9,7 +9,7 @@
  *  표준시간 = 수량 × 품목 택트타임(초/EA). 라인은 대기열 맨 위 로트부터 흘린다.
  * ---------------------------------------------------------------------------
  */
-import { FACTORY_ASSETS, PRODUCTION_LINES } from './factoryAssets.js';
+import { CYLINDER_CAPACITY, FACTORY_ASSETS, PRODUCTION_LINES } from './factoryAssets.js';
 
 /**
  * 로트 번호 발번.
@@ -74,6 +74,23 @@ export const INITIAL_OFFSETS_BY_LINE = Object.fromEntries(
 /* ※ 단계별(개포장/이송/충전/검사) 수량 집계는 두지 않는다 — 이 공정은 1세트
    단위 흐름 공정이라 원자재 1개가 라인 전체를 통과하는 것으로 센다.
    (factoryAssets.js 공정 개요 참조. 단계 분해가 필요해지면 그때 다시 설계) */
+
+/**
+ * 실린더 만충 상태 — 순수 함수.
+ *  1세트 = 실린더 1회 충전. 누적 세트 수(완료 로트 EA + 현재 로트 진행분)에서
+ *  유도하므로 별도 카운터 없이 엔진 상태와 항상 일치한다.
+ *   채움 = 누적 % 용량 · 반출 실린더 = 누적 ÷ 용량
+ */
+export const computeCylinder = (produced, elapsedSec, taktSec, hasLot) => {
+  const inCycle = hasLot && taktSec > 0 ? Math.floor(elapsedSec / taktSec) : 0;
+  const cum = Math.max(0, (produced ?? 0)) + inCycle;
+  return {
+    fill: cum % CYLINDER_CAPACITY,
+    capacity: CYLINDER_CAPACITY,
+    discharged: Math.floor(cum / CYLINDER_CAPACITY),
+    active: Boolean(hasLot),
+  };
+};
 
 export const CCTV_FEEDS = [
   { id: 'CAM-01', label: 'Line_1 · 절단기 상부', src: '/cctv/cam-01.mp4' },

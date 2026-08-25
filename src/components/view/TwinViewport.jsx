@@ -95,7 +95,7 @@ const TwinViewport = ({
   theme, mode, selectedId, selectedAsset, onSelect,
   offsets, offsetsByLine, onMove, onOffsetReset, now, simElapsed, speed, onExpandCam,
   animTimeScale, animByLine, animPaused, activeLineId, faults, focusRequest,
-  onFocusAsset,
+  onFocusAsset, dischargedByLine,
   canAdjustLayout = true,
 }) => {
   const controlsRef = useRef(null);
@@ -166,6 +166,7 @@ const TwinViewport = ({
           onProcessTick={setProcessTime}
           faults={faults}
           focusRequest={focusRequest}
+          dischargedByLine={dischargedByLine}
           theme={theme}
           controlsRef={controlsRef}
         />

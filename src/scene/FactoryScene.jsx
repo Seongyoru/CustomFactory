@@ -203,6 +203,86 @@ function useProcessAnimation(object, animations, clock, assetId) {
 }
 
 /* ---------------------------------------------------------------------------
+ * 실린더 만충 반출 연출
+ * ---------------------------------------------------------------------------
+ *  라인별 반출 카운트가 올라가는 순간, 카트 위치에서
+ *   - 바닥 링 펄스(에메랄드)가 퍼지며 사라지고
+ *   - "실린더 만충 · 반출" 토스트가 떠올랐다 사라진다
+ *  GLB 는 건드리지 않는 런타임 연출이다. 공유 머티리얼도 만지지 않으므로
+ *  오류 하이라이트 등 다른 효과와 충돌하지 않는다.
+ * ------------------------------------------------------------------------- */
+/* 카트 대기 위치 — GLB 에 구워진 좌표 (factoryAssets 의 CART_UNIT 주석 참조) */
+const CART_FX_ANCHOR = [3.74, 0.06, -1.51]; // 바닥 링 (그리드 3cm 위)
+const CART_TOAST_Y = 2.5; // 토스트 높이
+
+const DISCHARGE_COLOR = '#10b981'; // STATUS.RUNNING 과 같은 에메랄드 — '완료' 톤
+
+function DischargePulseRing({ position }) {
+  const ref = useRef();
+  const t0 = useRef(null);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    if (t0.current === null) t0.current = clock.elapsedTime;
+    const k = Math.min(1, (clock.elapsedTime - t0.current) / 1.6);
+    const s = 1 + k * 1.8;
+    ref.current.scale.set(s, s, s);
+    ref.current.material.opacity = 0.75 * (1 - k);
+    ref.current.visible = k < 1;
+  });
+  return (
+    <mesh ref={ref} position={position} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.85, 1.02, 48]} />
+      <meshBasicMaterial color={DISCHARGE_COLOR} transparent opacity={0.75} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function CylinderDischargeFx({ origin, discharged }) {
+  const [fx, setFx] = useState(null); // { id, count }
+  const prev = useRef(discharged);
+
+  /* 개발 모드 진단 — E2E 에서 마운트/트리거 여부 확인용 */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.__dischargeFx = window.__dischargeFx ?? { mounted: 0, seen: [] };
+    window.__dischargeFx.mounted += 1;
+  }, []);
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      window.__dischargeFx = window.__dischargeFx ?? { mounted: 0, seen: [] };
+      window.__dischargeFx.seen.push(discharged);
+    }
+    if (prev.current === discharged) return undefined;
+    const rising = discharged > prev.current;
+    prev.current = discharged;
+    if (!rising) return undefined; // 데이터 리셋 등 감소는 연출하지 않는다
+    const id = Date.now();
+    setFx({ id, count: discharged });
+    const timer = setTimeout(() => setFx((cur) => (cur?.id === id ? null : cur)), 2600);
+    return () => clearTimeout(timer);
+  }, [discharged]);
+
+  if (!fx) return null;
+  const base = [origin[0] + CART_FX_ANCHOR[0], origin[1] + CART_FX_ANCHOR[1], origin[2] + CART_FX_ANCHOR[2]];
+  return (
+    <group>
+      <DischargePulseRing key={fx.id} position={base} />
+      <Html
+        position={[base[0], origin[1] + CART_TOAST_Y, base[2]]}
+        center
+        zIndexRange={[30, 10]}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div className="discharge-toast">
+          <span className="discharge-toast-title">실린더 만충 · 반출</span>
+          <span className="discharge-toast-sub">누적 {fx.count}개</span>
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+/* ---------------------------------------------------------------------------
  * 오류 설비 하이라이트
  * ---------------------------------------------------------------------------
  *  알람이 걸린 설비를 붉게 발광시킨다. 색을 통째로 바꾸면 어떤 설비인지
@@ -720,6 +800,7 @@ function SceneContents({
   clocks,
   animByLine,
   faults,
+  dischargedByLine,
   registerObject,
 }) {
   return (
@@ -775,6 +856,15 @@ function SceneContents({
           registerObject={line.id === activeLineId ? registerObject : undefined}
         />
       ))}
+
+      {/* 실린더 만충 반출 연출 — 반출 카운트가 올라가는 라인의 카트 위치에서 발동 */}
+      {PRODUCTION_LINES.map((line) => (
+        <CylinderDischargeFx
+          key={`discharge-${line.id}`}
+          origin={line.origin}
+          discharged={dischargedByLine?.[line.id] ?? 0}
+        />
+      ))}
     </>
   );
 }
@@ -823,6 +913,7 @@ export default function FactoryScene({
   onProcessTick,
   faults = {},
   focusRequest = null,
+  dischargedByLine = {},
   theme,
   controlsRef,
 }) {
@@ -894,6 +985,7 @@ export default function FactoryScene({
             clocks={clocksRef.current}
             animByLine={animByLine}
             faults={faults}
+            dischargedByLine={dischargedByLine}
             registerObject={registerObject}
           />
           {/* HUD 는 지금 보고 있는 라인의 공정 시각을 따라간다 */}

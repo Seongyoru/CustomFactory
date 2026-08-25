@@ -28,7 +28,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertOctagon } from 'lucide-react';
 
 import {
-  CYLINDER_CAPACITY,
   FAULT_SCENARIOS,
   PROCESS_CYCLE_SEC,
   PRODUCTION_LINES,
@@ -39,6 +38,7 @@ import {
   INITIAL_JOBS_BY_LINE,
   INITIAL_OFFSETS_BY_LINE,
   INITIAL_PRODUCT_CATALOG,
+  computeCylinder,
   makeLot,
   makeLotId,
   nextLotSeq,
@@ -253,23 +253,35 @@ export default function DigitalTwinDashboard() {
   );
 
   /**
-   * 실린더 만충 연동 — 1세트 = 실린더 1회 충전.
-   *  누적 세트 수(완료 로트 EA + 현재 로트 진행분)에서 유도한다:
-   *   채움 = 누적 % 용량 · 반출 실린더 = 누적 ÷ 용량
-   *  별도 카운터가 없어 엔진 상태와 어긋날 일이 없다. E-STOP 이면 경과시간이
-   *  멈추므로 채움도 함께 멈추고, 선두 로트 취소 시 진행분은 무효가 된다.
+   * 실린더 만충 연동 — 1세트 = 실린더 1회 충전 (computeCylinder 참조).
+   *  E-STOP 이면 경과시간이 멈추므로 채움도 함께 멈추고,
+   *  선두 로트 취소 시 진행분은 무효가 된다.
    */
-  const cylinder = useMemo(() => {
-    const produced = lineStats[plant]?.produced ?? 0;
-    const inCycle = currentJob && taktSec > 0 ? Math.floor(elapsed / taktSec) : 0;
-    const cum = produced + inCycle;
-    return {
-      fill: cum % CYLINDER_CAPACITY,
-      capacity: CYLINDER_CAPACITY,
-      discharged: Math.floor(cum / CYLINDER_CAPACITY),
-      active: Boolean(currentJob),
-    };
-  }, [lineStats, plant, currentJob, taktSec, elapsed]);
+  const cylinderOf = (lineId) => {
+    const head = jobsByLine[lineId]?.[0] ?? null;
+    return computeCylinder(
+      lineStats[lineId]?.produced,
+      elapsedByLine[lineId] ?? 0,
+      taktOf(head),
+      Boolean(head)
+    );
+  };
+  const cylinder = useMemo(
+    () => cylinderOf(plant),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [jobsByLine, lineStats, elapsedByLine, plant]
+  );
+
+  /**
+   * 라인별 반출 카운트 — 3D 반출 연출의 트리거.
+   *  경과시간은 매초 바뀌지만 반출 수는 만충 순간에만 바뀐다. 값이 실제로 변할
+   *  때만 참조가 갱신되게 문자열 키로 고정해, 씬 memo 가 매초 깨지지 않게 한다.
+   */
+  const dischargedKey = PLANTS.map((l) => cylinderOf(l.id).discharged).join(',');
+  const dischargedByLine = useMemo(() => {
+    const parts = dischargedKey.split(',');
+    return Object.fromEntries(PLANTS.map((l, i) => [l.id, Number(parts[i]) || 0]));
+  }, [dischargedKey]);
 
   /* 금일 누적 생산량(선택된 라인) — 완료될 때마다 점프해 배속 효과가 눈에 띈다 */
   const todayQty = useMemo(() => {
@@ -551,6 +563,7 @@ export default function DigitalTwinDashboard() {
           faults={faults}
           focusRequest={focusRequest}
           onFocusAsset={handleFocusAsset}
+          dischargedByLine={dischargedByLine}
           canAdjustLayout={can('layout.adjust')}
         />
 
