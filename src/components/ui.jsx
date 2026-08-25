@@ -4,21 +4,27 @@
  * =============================================================================
  */
 import React, { useEffect, useState } from 'react';
-import { Boxes } from 'lucide-react';
+import { Boxes, Info } from 'lucide-react';
 import { STATUS } from '../data/factoryAssets.js';
 import { assetUrl } from '../lib/baseUrl.js';
 
-export const Panel = ({ theme, className = '', children }) => (
-  <section className={`rounded-xl border ${theme.panelBorder} ${theme.panelBg} backdrop-blur-sm ${className}`}>
+export const Panel = ({ theme, className = '', children, ...rest }) => (
+  <section {...rest} className={`rounded-xl border ${theme.panelBorder} ${theme.panelBg} backdrop-blur-sm ${className}`}>
     {children}
   </section>
 );
 
-export const PanelTitle = ({ icon: Icon, title, right, theme }) => (
+export const PanelTitle = ({ icon: Icon, title, right, theme, hint }) => (
   <header className={`flex items-center justify-between px-3 py-2.5 border-b ${theme.divider}`}>
     <div className="flex items-center gap-2">
       <Icon className={`w-4 h-4 ${theme.accentText}`} />
       <h2 className={`text-[13px] font-semibold tracking-tight ${theme.textPrimary}`}>{title}</h2>
+      {/* 패널이 뭘 보여주는지 짧게 설명하는 도움말 — 아이콘에 올리면 뜬다 */}
+      {hint && (
+        <span title={hint} className="cursor-help inline-flex" aria-label={hint}>
+          <Info className={`w-3 h-3 ${theme.textGhost}`} />
+        </span>
+      )}
     </div>
     {right}
   </header>

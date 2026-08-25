@@ -27,7 +27,18 @@ const DARK_BASE = {
   trackBg: 'bg-black/40',
   overlayBg: 'bg-black/70',
   cardBg: 'bg-black/20',
-  scene: { bg: '#060b16', fog: '#060b16', gridCell: '#1e293b' },
+  /**
+   * 3D 배경.
+   *  bgGradient 는 캔버스 '뒤' DOM 에 칠하는 CSS 그라데이션이다 — 캔버스는 투명으로
+   *  두고 이게 비쳐 보인다(three 만으로 그라데이션을 만들면 지오메트리가 필요해진다).
+   *  fog 는 그라데이션의 중간 톤과 맞춰야 원경이 배경에 자연스럽게 녹는다.
+   */
+  scene: {
+    bg: '#101b30',
+    bgGradient: 'linear-gradient(180deg, #24344f 0%, #131f36 55%, #0b1526 100%)',
+    fog: '#16233c',
+    gridCell: '#2c3c58',
+  },
 };
 
 const LIGHT_BASE = {
@@ -46,7 +57,12 @@ const LIGHT_BASE = {
   trackBg: 'bg-slate-300',
   overlayBg: 'bg-white/85',
   cardBg: 'bg-slate-50',
-  scene: { bg: '#dfe6ef', fog: '#dfe6ef', gridCell: '#a8b6c8' },
+  scene: {
+    bg: '#dfe6ef',
+    bgGradient: 'linear-gradient(180deg, #f5f8fc 0%, #e2e9f2 55%, #ccd7e5 100%)',
+    fog: '#e0e7f0',
+    gridCell: '#a8b6c8',
+  },
 };
 
 export const THEMES = {

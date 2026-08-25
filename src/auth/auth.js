@@ -59,8 +59,8 @@ export const PERMISSION_HINTS = {
  * 데모 계정. PIN 은 화면에 함께 표기된다 — 시연용이지 보안 장치가 아니다.
  */
 export const USERS = [
-  { id: 'admin', name: '백성열', role: 'admin', pin: '0000' },
-  { id: 'operator', name: '김현수', role: 'operator', pin: '1111' },
+  { id: 'admin', name: '관리자', role: 'admin', pin: '0000' },
+  { id: 'operator', name: '운영자', role: 'operator', pin: '1111' },
   { id: 'viewer', name: '게스트', role: 'viewer', pin: '2222' },
 ];
 

@@ -8,7 +8,7 @@ import {
   Grid3x3, Layers, Maximize2, Move3d, RotateCcw, Video, Workflow,
 } from 'lucide-react';
 import FactoryScene, { CAMERA_HOME } from '../../scene/FactoryScene.jsx';
-import { PROCESS_CYCLE_SEC, PROCESS_PHASES, findLine } from '../../data/factoryAssets.js';
+import { PROCESS_CYCLE_SEC, PROCESS_PHASES, SELECTABLE_ASSETS, findLine } from '../../data/factoryAssets.js';
 import { CCTV_FEEDS } from '../../data/jobs.js';
 import {
   fmtAnimScale, fmtClock, fmtDate, fmtDuration, fmtSec, fmtSpeed,
@@ -95,6 +95,7 @@ const TwinViewport = ({
   theme, mode, selectedId, selectedAsset, onSelect,
   offsets, offsetsByLine, onMove, onOffsetReset, now, simElapsed, speed, onExpandCam,
   animTimeScale, animByLine, animPaused, activeLineId, faults, focusRequest,
+  onFocusAsset,
   canAdjustLayout = true,
 }) => {
   const controlsRef = useRef(null);
@@ -148,8 +149,9 @@ const TwinViewport = ({
     <main className="relative flex-1 min-w-0 h-full p-3 pl-0">
       <div
         ref={wrapperRef}
+        data-tour="viewport"
         className={`relative w-full h-full rounded-xl overflow-hidden border ${theme.panelBorder} ${theme.glow}`}
-        style={{ backgroundColor: theme.scene.bg }}
+        style={{ background: theme.scene.bgGradient ?? theme.scene.bg }}
       >
         <Scene
           selectedId={selectedId}
@@ -198,7 +200,7 @@ const TwinViewport = ({
           </div>
         )}
 
-        {/* --- 좌상단 상태 HUD --- */}
+        {/* --- 좌상단 상태 HUD + 설비 빠른 이동 --- */}
         <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
           <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border ${theme.chip}`}>
             {mode === 'simulation' ? `SIMULATION ×${fmtSpeed(speed)}` : 'LIVE'}
@@ -208,6 +210,21 @@ const TwinViewport = ({
             {mode === 'operation' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
             {mode === 'operation' ? `${fmtDate(now)}  ${fmtClock(now)}` : `T+ ${fmtDuration(simElapsed)}`}
           </span>
+
+          {/* 설비를 고르면 선택 + 카메라가 그 설비로 날아간다 (3D 클릭이 익숙지 않아도 접근 가능) */}
+          <select
+            value=""
+            onChange={(e) => { if (e.target.value) onFocusAsset?.(e.target.value); e.target.value = ''; }}
+            title="설비를 선택하면 카메라가 해당 설비로 이동합니다"
+            className={`pointer-events-auto h-[26px] px-2 rounded-md border text-[10px] font-semibold cursor-pointer
+              ${theme.panelBorder} ${theme.overlayBg} ${theme.textSecondary} backdrop-blur-sm
+              focus:outline-none focus:ring-2 ${theme.accentRing}`}
+          >
+            <option value="">설비 바로가기…</option>
+            {SELECTABLE_ASSETS.map((a) => (
+              <option key={a.id} value={a.id}>{a.name} · {a.nameKo}</option>
+            ))}
+          </select>
         </div>
 
         {/* --- 우상단 뷰 컨트롤 --- */}

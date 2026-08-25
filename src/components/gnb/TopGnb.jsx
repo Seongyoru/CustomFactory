@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, LogOut, Moon, Siren, Sun, User,
+  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, GraduationCap, LogOut, Moon, Siren, Sun, User,
 } from 'lucide-react';
 import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
 import { ROLES } from '../../auth/auth.js';
@@ -19,7 +19,7 @@ const TopGnb = ({
   eStopEngaged, onEStop, eStopAllowed = true, eStopHint,
   now, simElapsed, speed,
   appearance, onToggleAppearance, faultActive, onFaultTest, faultTestAllowed = true, faultTestHint,
-  onOpenReport, user, onLogout,
+  onOpenReport, user, onLogout, onStartTutorial,
 }) => {
   /* 프로필 드롭다운 — 바깥 클릭으로 닫힌다 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,7 +47,7 @@ const TopGnb = ({
         </div>
       </div>
 
-      <div className="relative">
+      <div className="relative" data-tour="line">
         <Factory className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none ${theme.textMuted}`} />
         <select
           value={plant}
@@ -68,6 +68,7 @@ const TopGnb = ({
       {/* 개발/데모용 — 실제 연동 시에는 OPC-UA 알람 수신으로 대체된다 */}
       <button
         type="button"
+        data-tour="fault"
         onClick={onFaultTest}
         disabled={!faultTestAllowed}
         title={!faultTestAllowed
@@ -84,7 +85,7 @@ const TopGnb = ({
         {faultActive ? '오류 해제' : '오류 상황 테스트'}
       </button>
 
-      <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`}>
+      <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`} data-tour="mode">
       <span
         className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full transition-all duration-300 ease-out
           ${theme.accentBg} ${mode === 'operation' ? 'left-1' : 'left-[calc(50%+3px)]'}`}
@@ -111,6 +112,7 @@ const TopGnb = ({
     <div className="flex items-center gap-2.5">
       <button
         type="button"
+        data-tour="report"
         onClick={onOpenReport}
         title="생산 리포트 · 알람 이력 · 작업 로그"
         className={`flex items-center gap-1.5 h-9 px-3 rounded-lg border text-[11px] font-semibold whitespace-nowrap
@@ -148,6 +150,7 @@ const TopGnb = ({
 
       <button
         type="button"
+        data-tour="estop"
         onClick={onEStop}
         disabled={!eStopAllowed}
         title={!eStopAllowed ? eStopHint : undefined}
@@ -166,7 +169,7 @@ const TopGnb = ({
       <div className={`h-6 w-px ${theme.dividerStrong}`} />
 
       {/* 프로필 + 로그아웃 드롭다운 */}
-      <div className="relative" ref={menuRef}>
+      <div className="relative" ref={menuRef} data-tour="profile">
         <button
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
@@ -193,6 +196,15 @@ const TopGnb = ({
               <p className={`text-[12px] font-semibold ${theme.textPrimary}`}>{user?.name}</p>
               <p className={`text-[10px] mt-0.5 ${theme.textFaint}`}>{ROLES[user?.role]?.label}</p>
             </div>
+            <button
+              type="button"
+              onClick={() => { setMenuOpen(false); onStartTutorial?.(); }}
+              className={`w-full flex items-center gap-2 px-3 py-2.5 text-[12px] font-medium
+                ${theme.textSecondary} ${theme.hoverBg} transition-colors border-b ${theme.divider}`}
+            >
+              <GraduationCap className="w-3.5 h-3.5" />
+              튜토리얼 다시 보기
+            </button>
             <button
               type="button"
               onClick={() => { setMenuOpen(false); onLogout?.(); }}

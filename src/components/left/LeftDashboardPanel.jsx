@@ -3,8 +3,8 @@
  *  좌측 패널 — 생산 라인 진행률 / 작업 대기열 / 시뮬레이션 배속
  * =============================================================================
  */
-import React, { useMemo } from 'react';
-import { Gauge, GripVertical, Layers, Plus, Settings2, Trash2, Upload, X } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { FastForward, Gauge, GripVertical, Layers, Plus, Settings2, Trash2, Upload, X } from 'lucide-react';
 import { STAGE_ORDER, stageOf } from '../../data/jobs.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtSpeed, pad,
@@ -13,14 +13,23 @@ import { GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
-  selectedJobId, onSelectJob,
+  selectedJobId, onSelectJob, onReorderJobs,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
+  todayQty = 0,
   canManageJobs = true, manageHint,
 }) => {
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
   const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? null;
   const targetQty = jobs.reduce((sum, j) => sum + j.qty, 0);
   const doneQty = currentJob ? Math.round(currentJob.qty * (progress / 100)) : 0;
+
+  /* 시뮬레이션 배속을 반영한 시간당 처리량 — 배속을 올리면 즉시 뛴다 */
+  const simSpeed = mode === 'simulation' ? speed : 1;
+  const throughputPerHour = taktSec > 0 ? Math.round((3600 / taktSec) * simSpeed) : 0;
+
+  /* 대기열 드래그 정렬 */
+  const dragFrom = useRef(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
 
   const finishAt = useMemo(() => {
     if (!currentJob) return '--:--';
@@ -61,12 +70,23 @@ const LeftDashboardPanel = ({
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
       {/* 작업 진행률 --------------------------------------------- */}
-      <Panel theme={theme} className={theme.glow}>
+      <Panel theme={theme} className={theme.glow} data-tour="progress">
         <PanelTitle
           icon={Gauge}
           title="생산 라인 진행률"
           theme={theme}
-          right={<span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>DAY SHIFT</span>}
+          hint="선두 작업의 진행률과 단계별 부하입니다. 작업이 완료되면 대기열이 전진하고 실적은 리포트에 쌓입니다."
+          right={
+            mode === 'simulation' && speed > 1 ? (
+              /* 가속 중임을 한눈에 — 배속을 올리면 여기부터 달라진다 */
+              <span className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border font-bold ${theme.chip}`}>
+                <FastForward className={`w-3 h-3 ${theme.accentText}`} />
+                ×{fmtSpeed(speed)} 가속
+              </span>
+            ) : (
+              <span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>DAY SHIFT</span>
+            )
+          }
         />
         <div className="p-3 space-y-3">
           <div className="flex items-end justify-between">
@@ -96,11 +116,19 @@ const LeftDashboardPanel = ({
             </div>
           </div>
 
-          <div className={`grid grid-cols-3 gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 text-center`}>
-            {[['목표', `${targetQty} EA`], ['실적', `${doneQty} EA`], ['완료 예정', finishAt]].map(([k, v]) => (
+          <div className={`grid grid-cols-4 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
+            {[
+              ['대기 물량', `${targetQty}`],
+              ['진행', `${doneQty}`],
+              /* 완료 작업의 누적 — 작업이 끝날 때마다 점프해서 배속 효과가 눈에 띈다 */
+              ['금일 생산', `${todayQty}`],
+              ['완료 예정', finishAt],
+            ].map(([k, v], i) => (
               <div key={k}>
                 <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
-                <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</p>
+                <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${i === 2 ? theme.accentText : theme.textSecondary}`}>
+                  {v}
+                </p>
               </div>
             ))}
           </div>
@@ -133,11 +161,12 @@ const LeftDashboardPanel = ({
       </Panel>
 
       {/* 작업 대기열 --------------------------------------------- */}
-      <Panel theme={theme} className="flex-1 min-h-[220px] flex flex-col">
+      <Panel theme={theme} className="flex-1 min-h-[220px] flex flex-col" data-tour="queue">
         <PanelTitle
           icon={Layers}
           title="작업 대기열"
           theme={theme}
+          hint="맨 위 작업이 지금 생산 중입니다. 행을 드래그해 순서를 바꾸고, 클릭해 선택한 뒤 취소할 수 있습니다."
           right={<span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{jobs.length} JOBS</span>}
         />
 
@@ -149,11 +178,35 @@ const LeftDashboardPanel = ({
               key={job.id}
               onClick={() => onSelectJob(picked ? null : job.id)}
               aria-selected={picked}
+              draggable={canManageJobs}
+              onDragStart={(e) => {
+                dragFrom.current = idx;
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+              onDragOver={(e) => {
+                if (dragFrom.current === null) return;
+                e.preventDefault(); // drop 을 허용
+                setDragOverIdx(idx);
+              }}
+              onDragLeave={() => setDragOverIdx((cur) => (cur === idx ? null : cur))}
+              onDrop={(e) => {
+                e.preventDefault();
+                const from = dragFrom.current;
+                dragFrom.current = null;
+                setDragOverIdx(null);
+                if (from !== null && from !== idx) onReorderJobs?.(from, idx);
+              }}
+              onDragEnd={() => { dragFrom.current = null; setDragOverIdx(null); }}
               className={`group flex items-center gap-2 rounded-lg border px-2 py-2 transition-colors cursor-pointer
                 ${idx === 0 ? `${theme.accentBgSoft} ${theme.panelBorder}` : `${theme.panelBorder} ${theme.cardBg} ${theme.hoverBg}`}`}
-              style={picked ? { borderColor: theme.accentHex, boxShadow: `inset 0 0 0 1px ${theme.accentHex}` } : undefined}
+              style={{
+                ...(picked ? { borderColor: theme.accentHex, boxShadow: `inset 0 0 0 1px ${theme.accentHex}` } : null),
+                ...(dragOverIdx === idx ? { borderColor: theme.accentHex, borderStyle: 'dashed' } : null),
+              }}
             >
-              <GripVertical className={`w-3.5 h-3.5 shrink-0 ${theme.textGhost}`} />
+              <GripVertical
+                className={`w-3.5 h-3.5 shrink-0 ${canManageJobs ? `cursor-grab ${theme.textFaint}` : theme.textGhost}`}
+              />
               <span className={`w-5 text-[10px] tabular-nums ${theme.textGhost}`}>{pad(idx + 1)}</span>
               <div className="min-w-0 flex-1">
                 <p className={`truncate text-[12px] font-medium ${theme.textSecondary}`}>{job.name}</p>
@@ -221,11 +274,12 @@ const LeftDashboardPanel = ({
       </Panel>
 
       {/* 시뮬레이션 배속 ------------------------------------------ */}
-      <Panel theme={theme}>
+      <Panel theme={theme} data-tour="speed">
         <PanelTitle
           icon={Settings2}
           title="시뮬레이션 배속"
           theme={theme}
+          hint="시뮬레이션 모드에서만 조절됩니다. 배속은 경과시간·3D 설비 동작·처리량에 모두 함께 적용됩니다."
           right={<span className={`text-xs font-bold tabular-nums ${theme.accentText}`}>{fmtSpeed(speed)}x</span>}
         />
         <div className="p-3 pt-2.5">
@@ -246,22 +300,34 @@ const LeftDashboardPanel = ({
             ))}
           </div>
 
-          {/* 3D 애니메이션 연동 상태 — 택트타임이 곧 재생 속도다 */}
-          <div className={`mt-2.5 grid grid-cols-2 gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 text-center`}>
+          {/* 3D 애니메이션 연동 + 처리량 — 배속을 올리면 처리량이 그 자리에서 뛴다 */}
+          <div className={`mt-2.5 grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
             <div>
               <p className={`text-[10px] ${theme.textFaint}`}>택트타임</p>
               <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>
-                {taktSec.toFixed(1)} s/EA
+                {taktSec.toFixed(1)}s
               </p>
             </div>
             <div>
-              <p className={`text-[10px] ${theme.textFaint}`}>3D 재생 배속</p>
+              <p className={`text-[10px] ${theme.textFaint}`}>3D 배속</p>
               <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.accentText}`}>
                 ×{fmtAnimScale(animTimeScale)}
               </p>
             </div>
+            <div>
+              <p className={`text-[10px] ${theme.textFaint}`}>처리량</p>
+              <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.accentText}`}>
+                {throughputPerHour} <span className={`text-[9px] ${theme.textFaint}`}>EA/h</span>
+              </p>
+            </div>
           </div>
 
+          {mode === 'simulation' && speed > 1 && (
+            <p className={`mt-2 text-[10px] leading-relaxed ${theme.accentText}`}>
+              <FastForward className="inline w-3 h-3 mr-0.5 align-[-2px]" />
+              실시간 대비 <b>×{fmtSpeed(speed)}</b> 빠르게 생산 중 — 1시간에 약 {throughputPerHour} EA
+            </p>
+          )}
           {mode !== 'simulation' && (
             <p className={`mt-2 text-[10px] leading-relaxed ${theme.textFaint}`}>
               실시간 운전 중에는 배속 조절이 잠깁니다. 시뮬레이션 모드로 전환하세요.

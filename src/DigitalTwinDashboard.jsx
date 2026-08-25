@@ -24,7 +24,7 @@
  * =============================================================================
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertOctagon } from 'lucide-react';
 
 import {
@@ -63,6 +63,7 @@ import ReportModal from './components/report/ReportModal.jsx';
 import { clearAllPersisted } from './lib/persist.js';
 import { PERMISSION_HINTS, ROLES, hasPermission } from './auth/auth.js';
 import LoginScreen from './auth/LoginScreen.jsx';
+import TutorialOverlay from './components/TutorialOverlay.jsx';
 
 /* 라인 목록은 3D 배치와 같은 소스를 쓴다 — factoryAssets.PRODUCTION_LINES */
 const PLANTS = PRODUCTION_LINES;
@@ -112,6 +113,13 @@ export default function DigitalTwinDashboard() {
   const [excelModal, setExcelModal] = useState(false);
   const [expandedCam, setExpandedCam] = useState(null);
   const [reportModal, setReportModal] = useState(false);
+
+  /* 튜토리얼 — 처음 로그인한 브라우저에서 한 번 자동 실행, 이후엔 메뉴에서 재실행 */
+  const [tutorialDone, setTutorialDone] = usePersistentState('tutorialDone', false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  useEffect(() => {
+    if (session && !tutorialDone) setTutorialOpen(true);
+  }, [session, tutorialDone]);
 
   /* 라인별 설비 배치 오프셋 / 설비별 메모(라인 공용 — 설비 마스터가 공용이라) */
   const [offsetsByLine, setOffsetsByLine] = usePersistentState('offsetsByLine', INITIAL_OFFSETS_BY_LINE);
@@ -241,6 +249,14 @@ export default function DigitalTwinDashboard() {
     [alarm]
   );
 
+  /* 금일 누적 생산량(선택된 라인) — 완료될 때마다 점프해 배속 효과가 눈에 띈다 */
+  const todayQty = useMemo(() => {
+    const today = fmtDate(new Date());
+    return production
+      .filter((p) => p.lineId === plant && fmtDate(new Date(p.finishedAt)) === today)
+      .reduce((sum, p) => sum + p.qty, 0);
+  }, [production, plant]);
+
   /* 텔레메트리 — 정지(E-STOP)·유휴(대기열 없음) 라인은 센서값이 식는다 */
   const telemetryStopped = useMemo(
     () =>
@@ -359,6 +375,32 @@ export default function DigitalTwinDashboard() {
     }
   };
 
+  /** 대기열 드래그 정렬 — 선두가 바뀌면 진행 시간을 0 부터 다시 센다 */
+  const handleReorderJobs = (from, to) => {
+    const queue = jobs;
+    if (from === to || !queue[from]) return;
+    const next = [...queue];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    const headChanged = next[0]?.id !== queue[0]?.id;
+    /* 새 선두는 생산 중으로, 밀려난 이전 선두는 대기로 정리한다 */
+    const normalized = next.map((j, i) =>
+      i === 0
+        ? (j.state === 'RUNNING' ? j : { ...j, state: 'RUNNING' })
+        : (j.state === 'RUNNING' ? { ...j, state: 'IDLE' } : j)
+    );
+    updateLineJobs(() => normalized);
+    if (headChanged) resetElapsed(plant);
+    logEvent('JOB_REORDERED', `${moved.name} 순서 변경 (${from + 1}번 → ${to + 1}번)`, { lineId: plant });
+  };
+
+  /** 설비 바로가기 — 선택하고 카메라를 그 설비로 보낸다 */
+  const handleFocusAsset = (assetId) => {
+    setSelectedJobId(null);
+    setSelectedId(assetId);
+    setFocusRequest({ assetId, nonce: Date.now() });
+  };
+
   const handleAddMemo = (assetId, text) => {
     const memo = { id: Date.now(), at: new Date(), text, author: session?.name };
     setMemos((prev) => ({
@@ -451,6 +493,7 @@ export default function DigitalTwinDashboard() {
         onOpenReport={() => setReportModal(true)}
         user={session}
         onLogout={handleLogout}
+        onStartTutorial={() => setTutorialOpen(true)}
       />
 
       <div className="relative flex-1 min-h-0 flex">
@@ -461,6 +504,8 @@ export default function DigitalTwinDashboard() {
           onRequestCancel={setJobCancelTarget}
           selectedJobId={selectedJobId}
           onSelectJob={setSelectedJobId}
+          onReorderJobs={handleReorderJobs}
+          todayQty={todayQty}
           onOpenJobAdd={() => setJobAddModal(true)}
           onOpenExcel={() => setExcelModal(true)}
           speed={speed}
@@ -495,6 +540,7 @@ export default function DigitalTwinDashboard() {
           activeLineId={plant}
           faults={faults}
           focusRequest={focusRequest}
+          onFocusAsset={handleFocusAsset}
           canAdjustLayout={can('layout.adjust')}
         />
 
@@ -597,6 +643,17 @@ export default function DigitalTwinDashboard() {
 
       {expandedCam && (
         <CctvModal theme={theme} cam={expandedCam} now={now} onClose={() => setExpandedCam(null)} />
+      )}
+
+      {/* 튜토리얼 — 완료/건너뛰기 시 저장되어 다시 자동으로 뜨지 않는다 */}
+      {tutorialOpen && (
+        <TutorialOverlay
+          theme={theme}
+          onClose={() => {
+            setTutorialOpen(false);
+            setTutorialDone(true);
+          }}
+        />
       )}
 
       {reportModal && (

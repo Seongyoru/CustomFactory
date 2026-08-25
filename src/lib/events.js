@@ -17,6 +17,7 @@ export const EVENT_TYPES = {
   JOB_ADDED: { label: '작업 추가', tone: 'sky' },
   JOB_IMPORTED: { label: '엑셀 업로드', tone: 'sky' },
   JOB_CANCELLED: { label: '작업 취소', tone: 'amber' },
+  JOB_REORDERED: { label: '대기열 순서 변경', tone: 'sky' },
   JOB_COMPLETED: { label: '작업 완료', tone: 'emerald' },
   LAYOUT_MOVED: { label: '설비 배치 변경', tone: 'slate' },
   MEMO_ADDED: { label: '작업자 메모', tone: 'slate' },

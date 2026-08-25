@@ -36,12 +36,12 @@ const CAMERA_HOME = { position: [8.5, 5.2, 9.5], target: [0.4, 1.3, 0] };
 
 /**
  * 그리드를 바닥에서 살짝 띄우는 높이(m).
- *  인테리어 바닥 상면을 Y=0 에 맞춘 뒤로 그리드 평면과 바닥면이 완전히 같은
- *  높이에 놓여, 깊이값이 동일해지면서 z-fighting 이 발생한다(카메라를 움직이면
- *  얇은 셀 라인이 반짝임). 셸이 depthWrite:false 라 깊이 우선순위도 불안정하다.
- *  1.5cm 만 띄우면 겹침이 사라지고, 22×52m 공간에서는 눈에 띄지 않는다.
+ *  인테리어 바닥 상면이 Y=0 이라 같은 높이에 두면 깊이값이 겹친다.
+ *  3cm 는 22×52m 공간에서 눈에 띄지 않으면서 깊이 겹침을 확실히 피한다.
+ *  ※ 반짝임의 진짜 원인이었던 투명 오브젝트 정렬 문제는 FactoryShell 의
+ *    renderOrder(-1) 고정으로 해결한다 — 해당 주석 참조.
  */
-const GRID_LIFT = 0.015;
+const GRID_LIFT = 0.03;
 
 /**
  * 선택되지 않은 라인의 불투명도.
@@ -464,6 +464,20 @@ function FactoryShell({ opacity }) {
     transparent: !opaque,
     opacity,
   });
+
+  /**
+   * 셸을 투명 오브젝트 정렬에서 맨 앞(-1)으로 고정한다.
+   *  셸(바닥 포함)과 그리드는 둘 다 투명 재질이라 three 가 매 프레임 카메라
+   *  거리로 그리기 순서를 다시 정하는데, 둘의 거리가 엇비슷해 순서가 뒤바뀌면
+   *  카메라를 돌 때마다 그리드가 보였다 안 보였다 한다. renderOrder 는 메시마다
+   *  개별 적용이라 자식 전체를 순회해 지정한다.
+   */
+  useEffect(() => {
+    object.traverse((child) => {
+      if (child.isMesh) child.renderOrder = -1;
+    });
+  }, [object]);
+
   return <primitive object={object} position={SHELL_ASSET.offset} />;
 }
 
@@ -489,20 +503,76 @@ function ProcessTicker({ clock, onTick }) {
  *  평행이동한다. 사용자가 맞춰 둔 각도·줌은 그대로 두고 옆 라인으로 미끄러지듯
  *  넘어가므로, 시점이 초기화돼 방향을 잃는 일이 없다.
  */
-function useLineCameraShift(controlsRef, origin) {
-  const prev = useRef(origin);
+function useLineCameraShift(controlsRef, origin, focusRequest) {
+  const prevOrigin = useRef(origin);
+  const prevFocus = useRef(focusRequest);
+  const animRef = useRef(null);
+
   useEffect(() => {
-    const from = prev.current;
-    prev.current = origin;
+    const from = prevOrigin.current;
+    prevOrigin.current = origin;
+
+    /* 같은 커밋에 focusRequest 도 함께 바뀌었다면 알람 '해당 설비로 이동' 흐름이다.
+       그 경우 카메라는 FocusController 가 설비까지 끌고 가므로, 여기서 또
+       애니메이션을 걸면 두 애니메이션이 매 프레임 서로 덮어쓰며 떨린다.
+       예전처럼 즉시 평행이동만 해서 출발점을 잡아 준다. */
+    const focusTookOver = prevFocus.current !== focusRequest;
+
     const controls = controlsRef?.current;
     if (!controls || !from || from === origin) return;
 
     const delta = new THREE.Vector3(origin[0] - from[0], origin[1] - from[1], origin[2] - from[2]);
     if (delta.lengthSq() === 0) return;
-    controls.object.position.add(delta);
-    controls.target.add(delta);
-    controls.update();
+
+    if (animRef.current) {
+      cancelAnimationFrame(animRef.current);
+      animRef.current = null;
+    }
+
+    if (focusTookOver) {
+      controls.object.position.add(delta);
+      controls.target.add(delta);
+      controls.update();
+      return;
+    }
+
+    /* 일반 라인 전환 — 0.9초 ease-in-out 무빙. 타깃도 같이 옮기므로
+       도착한 뒤의 회전(OrbitControls)은 새 라인 중심을 기준으로 돈다. */
+    const startPos = controls.object.position.clone();
+    const startTgt = controls.target.clone();
+    const endPos = startPos.clone().add(delta);
+    const endTgt = startTgt.clone().add(delta);
+    const DURATION_MS = 900;
+    const t0 = performance.now();
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2);
+
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / DURATION_MS);
+      const e = ease(k);
+      controls.object.position.lerpVectors(startPos, endPos, e);
+      controls.target.lerpVectors(startTgt, endTgt, e);
+      controls.update();
+      animRef.current = k < 1 ? requestAnimationFrame(step) : null;
+    };
+    animRef.current = requestAnimationFrame(step);
+
+    return () => {
+      if (animRef.current) {
+        cancelAnimationFrame(animRef.current);
+        animRef.current = null;
+        /* 중간에 끊기면(라인 재전환·언마운트) 목적지로 스냅해 어긋남을 막는다 */
+        controls.object.position.copy(endPos);
+        controls.target.copy(endTgt);
+        controls.update();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlsRef, origin]);
+
+  /* 라인 전환 없이 focusRequest 만 바뀐 경우(같은 라인 내 알람)에도 최신값 유지 */
+  useEffect(() => {
+    prevFocus.current = focusRequest;
+  }, [focusRequest]);
 }
 
 /**
@@ -708,7 +778,7 @@ export default function FactoryScene({
   const draggingRef = useRef(false);
 
   const activeLine = PRODUCTION_LINES.find((l) => l.id === activeLineId) ?? PRODUCTION_LINES[0];
-  useLineCameraShift(controlsRef, activeLine.origin);
+  useLineCameraShift(controlsRef, activeLine.origin, focusRequest);
 
   /* 활성 라인 설비의 실제 3D 객체 — 알람에서 카메라를 맞출 때 쓴다 */
   const registry = useRef({});
@@ -741,12 +811,13 @@ export default function FactoryScene({
       <Canvas
         camera={{ position: CAMERA_HOME.position, fov: 45, near: 0.1, far: 500 }}
         dpr={[1, 1.75]}
-        gl={{ antialias: true, powerPreference: 'high-performance' }}
+        gl={{ antialias: true, powerPreference: 'high-performance', alpha: true }}
         onPointerMissed={() => {
           if (!draggingRef.current) onSelect(null);
         }}
       >
-        <color attach="background" args={[theme.scene.bg]} />
+        {/* 배경은 캔버스 뒤 DOM 의 CSS 그라데이션(theme.scene.bgGradient)이 비친다.
+            fog 색을 그라데이션 중간 톤과 맞춰 원경이 자연스럽게 녹게 한다. */}
         <fog attach="fog" args={[theme.scene.fog, 35, 110]} />
 
         <Suspense fallback={null}>

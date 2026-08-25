@@ -65,6 +65,7 @@ const TelemetryPanel = ({ theme, lineId, assetId, latest, seriesOf, sourceInfo }
         icon={Radio}
         title="실시간 센서"
         theme={theme}
+        hint="1초 간격의 시뮬레이션 계측값입니다. 정지한 라인은 식어가고, 오류 설비는 진동·전류가 치솟습니다. 실제 연동 시 OPC-UA 값이 같은 화면에 흐릅니다."
         right={
           <span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>
             {sourceInfo?.protocol ?? 'SIM'} · 1Hz
