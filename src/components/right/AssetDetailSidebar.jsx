@@ -1,77 +1,112 @@
 /**
  * =============================================================================
- *  우측 사이드바 — 설비 상세 (기본 정보 / 점검 이력 / 시뮬레이션 제어 / 메모)
+ *  우측 사이드바 — 설비 상세 (실시간 센서 / 기본 정보 / 점검 이력 / 병목 분석 / 메모)
  * =============================================================================
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  Activity, ChevronDown, Clock, Cpu, Pause, Play, Save, Siren, StickyNote, Wrench, X,
+  ChevronDown, Cpu, GitCommitHorizontal, Save, Siren, StickyNote, Wrench, X,
 } from 'lucide-react';
-import { STATUS } from '../../data/factoryAssets.js';
-import { fmtClock, fmtDate, fmtKoDateTime, fmtKoDuration } from '../../lib/format.js';
+import { PROCESS_CYCLE_SEC, PROCESS_PHASES, STATUS } from '../../data/factoryAssets.js';
+import { fmtClock, fmtDate, fmtKoDateTime } from '../../lib/format.js';
 import { ConsumableBar, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 import TelemetryPanel from './TelemetryPanel.jsx';
 
+/**
+ * 병목 분석 — 라인 1사이클(TOTAL 7.2s 마스터 타임라인)에서 이 설비가 실제로
+ * 움직이는 구간을 근거로, 사이클 점유율·여유율·병목 여부를 보여준다.
+ *  이 라인은 전 설비가 한 사이클로 묶인 흐름 생산이라 설비 단독 시뮬레이션은
+ *  성립하지 않는다 — 대신 "누가 사이클을 가장 오래 붙잡는가"가 유효한 질문이다.
+ */
+const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
+  const durOf = (p) => p.end - p.start;
+  const mine = PROCESS_PHASES.find((p) => p.id === asset.id) ?? null;
+  if (!mine) return null;
+
+  const maxDur = Math.max(...PROCESS_PHASES.map(durOf));
+  const isBottleneck = durOf(mine) === maxDur;
+  const share = durOf(mine) / PROCESS_CYCLE_SEC; // 사이클 점유율
+  const busySec = lineTaktSec * share; // 현재 로트 택트 기준 실작동 시간
+  const pct = (t) => `${(t / PROCESS_CYCLE_SEC) * 100}%`;
+
+  return (
+    <Panel theme={theme}>
+      <PanelTitle
+        icon={GitCommitHorizontal}
+        title="병목 분석"
+        theme={theme}
+        hint="라인 1사이클 안에서 각 설비가 실제로 움직이는 구간입니다. 가장 오래 움직이는 설비가 라인 속도를 결정하는 병목입니다. 이 라인은 전 설비가 한 사이클로 묶여 있어 설비 단독 시뮬레이션은 성립하지 않습니다."
+        right={
+          isBottleneck ? (
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-red-500/40 bg-red-500/10 text-red-500">
+              병목 설비
+            </span>
+          ) : (
+            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${theme.chip}`}>
+              여유 {Math.round((1 - share) * 100)}%
+            </span>
+          )
+        }
+      />
+      <div className="p-3 space-y-3">
+        {/* 수치 요약 */}
+        <div className={`grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
+          {[
+            ['사이클 점유', `${Math.round(share * 100)}%`],
+            ['가동 구간', `${mine.start.toFixed(1)}–${mine.end.toFixed(1)}s`],
+            ['실작동/택트', `${busySec.toFixed(1)}s / ${lineTaktSec.toFixed(1)}s`],
+          ].map(([k, v]) => (
+            <div key={k}>
+              <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
+              <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* 전 설비 사이클 점유 간트 — 이 설비 강조, 병목 표시 */}
+        <div className="space-y-1">
+          {[...PROCESS_PHASES].sort((a, b) => durOf(b) - durOf(a)).map((p) => {
+            const isMine = p.id === asset.id;
+            const isBn = durOf(p) === maxDur;
+            return (
+              <div key={p.id} className="flex items-center gap-2" title={`${p.label} · ${durOf(p).toFixed(1)}s (${Math.round((durOf(p) / PROCESS_CYCLE_SEC) * 100)}%)`}>
+                <span className={`w-[62px] shrink-0 text-[9px] truncate ${isMine ? `font-bold ${theme.textPrimary}` : theme.textFaint}`}>
+                  {p.label}
+                </span>
+                <span className={`relative flex-1 h-2 rounded-sm overflow-hidden ${theme.trackBg}`}>
+                  <span
+                    className="absolute inset-y-0 rounded-sm"
+                    style={{
+                      left: pct(p.start),
+                      width: pct(durOf(p)),
+                      backgroundColor: isBn ? '#ef4444' : theme.accentHex,
+                      opacity: isMine ? 1 : 0.3,
+                    }}
+                  />
+                </span>
+                <span className={`w-8 text-right text-[9px] tabular-nums ${isBn ? 'font-bold text-red-500' : theme.textGhost}`}>
+                  {isBn ? '병목' : `${durOf(p).toFixed(1)}s`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className={`text-[10px] leading-relaxed ${theme.textGhost}`}>
+          병목 설비의 가동 시간을 줄여야 라인 전체 택트가 짧아집니다. 나머지 설비는
+          그만큼의 여유를 갖고 대기합니다.
+        </p>
+      </div>
+    </Panel>
+  );
+};
+
 const AssetDetailSidebar = ({
   theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo,
-  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry,
+  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry, lineTaktSec = PROCESS_CYCLE_SEC,
 }) => {
-  const [simCount, setSimCount] = useState(100);
   const [memoDraft, setMemoDraft] = useState('');
   const [historyOpen, setHistoryOpen] = useState(true);
-
-  /**
-   * 설비 단독 가상 실행.
-   *  시작을 누르면 이 설비의 사이클을 지정 횟수만큼 '가상으로 고속 실행'해서
-   *  예상 생산량·불량·소요 시간을 결과로 보여준다. 실제 라인 상태는 건드리지
-   *  않는 예측 도구다 — 몇 초짜리 진행 후 결과 카드가 나온다.
-   */
-  const [simRun, setSimRun] = useState(null); // null | {progress} | {done, result}
-  const simTimerRef = useRef(null);
-
-  const startSim = () => {
-    if (!asset) return;
-    clearInterval(simTimerRef.current);
-    const DURATION_MS = 3500;
-    const t0 = Date.now();
-    const count = simCount;
-    const cycleSec = asset.cycleSec;
-    setSimRun({ progress: 0 });
-    simTimerRef.current = setInterval(() => {
-      const k = Math.min(1, (Date.now() - t0) / DURATION_MS);
-      if (k >= 1) {
-        clearInterval(simTimerRef.current);
-        setSimRun({
-          done: true,
-          result: {
-            cycles: count,
-            qty: count, // 1사이클 = 제품 1개 기준
-            defects: Math.round(count * Math.random() * 0.02),
-            totalSec: cycleSec * count,
-          },
-        });
-      } else {
-        setSimRun({ progress: k });
-      }
-    }, 80);
-  };
-  const stopSim = () => {
-    clearInterval(simTimerRef.current);
-    setSimRun(null);
-  };
-  /* 설비를 바꾸거나 패널이 닫히면 실행 중이던 가상 실행은 버린다 */
-  useEffect(() => {
-    clearInterval(simTimerRef.current);
-    setSimRun(null);
-  }, [asset?.id]);
-  useEffect(() => () => clearInterval(simTimerRef.current), []);
-
-  /* 사이클타임 × 횟수 = 총 소요 시간. 완료 '시각'과 걸리는 '시간'을 함께 보여준다. */
-  const simTotalSec = asset ? asset.cycleSec * simCount : 0;
-  const eta = useMemo(() => {
-    if (!asset) return '--:--';
-    return fmtClock(new Date(now.getTime() + simTotalSec * 1000), false);
-  }, [asset, simTotalSec, now]);
 
   const open = Boolean(asset);
   /**
@@ -226,110 +261,8 @@ const AssetDetailSidebar = ({
             )}
           </Panel>
 
-          {/* --- 시뮬레이션 제어 --- */}
-          <Panel theme={theme} className={mode === 'simulation' ? theme.glow : ''}>
-            <PanelTitle
-              icon={Activity}
-              title="시뮬레이션 제어"
-              theme={theme}
-              hint="이 설비의 사이클을 지정 횟수만큼 가상으로 고속 실행해 예상 생산량·불량·소요 시간을 예측합니다. 실제 라인 상태에는 영향이 없습니다."
-              right={<span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>{mode === 'simulation' ? 'READY' : 'LIVE 잠금'}</span>}
-            />
-            <div className="p-3 space-y-3">
-              <label className="block">
-                <span className={`block text-[11px] mb-1 ${theme.textMuted}`}>시뮬레이션 횟수 (cycle)</span>
-                <input
-                  type="number" min={1} max={9999}
-                  value={simCount}
-                  onChange={(e) => setSimCount(Math.max(1, Number(e.target.value) || 1))}
-                  disabled={mode !== 'simulation'}
-                  className={`w-full h-9 px-3 rounded-lg border ${theme.panelBorder} ${theme.inputBg} text-sm tabular-nums
-                    ${theme.textPrimary} focus:outline-none focus:ring-2 ${theme.accentRing}
-                    disabled:opacity-40 disabled:cursor-not-allowed`}
-                />
-              </label>
-
-              <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 space-y-1.5`}>
-                <div className="flex items-center justify-between">
-                  <span className={`flex items-center gap-1.5 text-[11px] ${theme.textMuted}`}>
-                    <Clock className="w-3.5 h-3.5" /> 예상 소요 시간
-                  </span>
-                  <span className={`text-sm font-bold tabular-nums ${theme.accentText}`}>
-                    {asset ? fmtKoDuration(simTotalSec) : '-'}
-                  </span>
-                </div>
-                <div className={`flex items-center justify-between border-t pt-1.5 ${theme.divider}`}>
-                  <span className={`text-[11px] ${theme.textMuted}`}>예측 완료 시각</span>
-                  <span className={`text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{eta}</span>
-                </div>
-                <p className={`text-[10px] tabular-nums ${theme.textGhost}`}>
-                  {asset ? `Cycle ${asset.cycleSec.toFixed(1)}s × ${simCount}회` : '-'}
-                </p>
-              </div>
-
-              {/* 실행 중 — 진행바 */}
-              {simRun && !simRun.done && (
-                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className={theme.textMuted}>가상 실행 중…</span>
-                    <span className={`font-bold tabular-nums ${theme.accentText}`}>
-                      {Math.round(simRun.progress * 100)}%
-                    </span>
-                  </div>
-                  <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
-                    <div
-                      className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
-                      style={{ width: `${simRun.progress * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* 완료 — 예측 결과 */}
-              {simRun?.done && (
-                <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
-                  <p className={`text-[11px] font-bold ${theme.accentText}`}>가상 실행 결과 (예측)</p>
-                  <dl className="mt-1.5 grid grid-cols-3 gap-1.5 text-center">
-                    {[
-                      ['생산량', `${simRun.result.qty} EA`],
-                      ['예상 불량', `${simRun.result.defects} EA`],
-                      ['실소요 예상', fmtKoDuration(simRun.result.totalSec)],
-                    ].map(([k, v]) => (
-                      <div key={k}>
-                        <dt className={`text-[10px] ${theme.textFaint}`}>{k}</dt>
-                        <dd className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <p className={`mt-1.5 text-[10px] ${theme.textGhost}`}>
-                    Cycle {simRun.result.cycles}회 기준 예측입니다. 실제 라인 상태에는 영향이 없습니다.
-                  </p>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={startSim}
-                  disabled={mode !== 'simulation' || Boolean(simRun && !simRun.done)}
-                  className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
-                    text-white transition ${theme.accentBg} hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
-                >
-                  <Play className="w-4 h-4" /> {simRun?.done ? '다시 실행' : '시작'}
-                </button>
-                <button
-                  type="button"
-                  onClick={stopSim}
-                  disabled={!simRun}
-                  className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
-                    border ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg} transition
-                    disabled:opacity-30 disabled:cursor-not-allowed`}
-                >
-                  <Pause className="w-4 h-4" /> {simRun?.done ? '결과 지우기' : '중지'}
-                </button>
-              </div>
-            </div>
-          </Panel>
+          {/* --- 병목 분석 --- */}
+          {asset && <BottleneckPanel theme={theme} asset={asset} lineTaktSec={lineTaktSec} />}
 
           {/* --- 작업자 메모 (작성 시각 기록) --- */}
           <Panel theme={theme}>

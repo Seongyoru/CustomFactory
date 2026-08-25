@@ -36,10 +36,11 @@ import {
 } from './data/factoryAssets.js';
 import {
   INITIAL_JOBS_BY_LINE,
-  INITIAL_JOB_TEMPLATES,
   INITIAL_OFFSETS_BY_LINE,
-  makeJobId,
-  nextJobSeq,
+  INITIAL_PRODUCT_CATALOG,
+  makeLot,
+  makeLotId,
+  nextLotSeq,
 } from './data/jobs.js';
 import { getTheme } from './theme.js';
 import { fmtAnimScale, fmtClock, fmtDate, fmtDuration, fmtSpeed } from './lib/format.js';
@@ -84,10 +85,10 @@ export default function DigitalTwinDashboard() {
   const [session, setSession] = usePersistentState('session', null);
   const [mode, setMode] = useState('operation');
   const [plant, setPlant] = useState(PLANTS[0].id);
-  /* 대기열은 라인별로 완전히 분리된다. 작업 카탈로그(templates)만 라인 공용이다.
+  /* 대기열(로트)은 라인별로 완전히 분리된다. 품목 카탈로그(products)만 라인 공용이다.
      대기열·카탈로그·배치·메모·이력은 localStorage 에 저장되어 새로고침에도 유지된다. */
   const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE);
-  const [templates, setTemplates] = usePersistentState('templates', INITIAL_JOB_TEMPLATES);
+  const [products, setProducts] = usePersistentState('products', INITIAL_PRODUCT_CATALOG);
   const [speed, setSpeed] = useState(1);
   const [selectedId, setSelectedId] = useState(null);
   /* 비상 정지는 라인 단위다 — 한 라인을 세워도 다른 라인은 계속 돈다 */
@@ -220,7 +221,7 @@ export default function DigitalTwinDashboard() {
    *  비상 정지된 라인은 paused 로 그 자리에 멈춘다.
    */
   const taktOf = (job) =>
-    job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC;
+    job?.taktSec > 0 ? job.taktSec : job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC;
   const scaleOf = (takt) =>
     Math.min(4, Math.max(0.1, PROCESS_CYCLE_SEC / takt)) * (mode === 'simulation' ? speed : 1);
 
@@ -411,46 +412,33 @@ export default function DigitalTwinDashboard() {
     logEvent('MEMO_ADDED', `${findAsset(assetId)?.name ?? assetId} 메모 작성`, { assetId });
   };
 
-  /** 엑셀에서 선택된 행들을 '선택된 라인' 대기열에 추가하고, 카탈로그에도 없으면 등록한다 */
+  /** 엑셀에서 선택된 행들을 '선택된 라인' 로트로 추가하고, 미등록 품목은 카탈로그에 등록한다 */
   const handleImportExcel = (rows) => {
-    logEvent('JOB_IMPORTED', `엑셀 업로드로 작업 ${rows.length}건 추가`, { lineId: plant });
+    logEvent('JOB_IMPORTED', `엑셀 업로드로 로트 ${rows.length}건 추가`, { lineId: plant });
     updateLineJobs((prev) => [
       ...prev,
-      ...rows.map((r, i) => ({
-        id: makeJobId(nextJobSeq(prev) + i),
-        name: r.name,
-        qty: r.qty,
-        totalSec: r.totalSec,
-        state: 'IDLE',
-      })),
+      ...rows.map((r, i) =>
+        makeLot(makeLotId(nextLotSeq(prev) + i), { name: r.name, taktSec: r.taktSec }, r.qty)
+      ),
     ]);
-    setTemplates((prev) => {
-      const known = new Set(prev.map((t) => t.name));
+    setProducts((prev) => {
+      const known = new Set(prev.map((p) => p.name));
       const added = rows
         .filter((r) => !known.has(r.name))
         .map((r, i) => ({
-          id: `TPL-${String(prev.length + i + 1).padStart(2, '0')}`,
+          id: `PRD-${String(prev.length + i + 1).padStart(2, '0')}`,
           name: r.name,
-          qty: r.qty,
-          totalSec: r.totalSec,
+          taktSec: r.taktSec,
+          defaultQty: r.qty,
         }));
       return [...prev, ...added];
     });
   };
 
-  const handleAddJob = (tpl, qty) => {
-    updateLineJobs((prev) => [
-      ...prev,
-      {
-        id: makeJobId(nextJobSeq(prev)),
-        name: tpl.name,
-        qty,
-        /* 표준시간은 '기본 수량 기준'이라 수량을 바꾸면 비례해 늘린다 */
-        totalSec: tpl.qty > 0 ? Math.round(tpl.totalSec * (qty / tpl.qty)) : tpl.totalSec,
-        state: 'IDLE',
-      },
-    ]);
-    logEvent('JOB_ADDED', `${tpl.name} · ${qty} EA 대기열 추가`, { lineId: plant });
+  /** 로트 추가 — 표준시간은 수량 × 품목 택트타임 */
+  const handleAddLot = (product, qty) => {
+    updateLineJobs((prev) => [...prev, makeLot(makeLotId(nextLotSeq(prev)), product, qty)]);
+    logEvent('JOB_ADDED', `${product.name} · ${qty} EA 로트 추가`, { lineId: plant });
   };
 
   /* 로그인 전에는 대시보드 대신 로그인 화면만 보여준다.
@@ -560,6 +548,7 @@ export default function DigitalTwinDashboard() {
           memoHint={PERMISSION_HINTS['memo.write']}
           lineId={plant}
           telemetry={telemetry}
+          lineTaktSec={taktSec}
         />
       </div>
 
@@ -626,9 +615,9 @@ export default function DigitalTwinDashboard() {
       {jobAddModal && (
         <JobAddModal
           theme={theme}
-          templates={templates}
-          onAddTemplate={(tpl) => setTemplates((prev) => [...prev, tpl])}
-          onAddJob={handleAddJob}
+          products={products}
+          onAddProduct={(product) => setProducts((prev) => [...prev, product])}
+          onAddLot={handleAddLot}
           onClose={() => setJobAddModal(false)}
         />
       )}
@@ -636,7 +625,7 @@ export default function DigitalTwinDashboard() {
       {excelModal && (
         <ExcelUploadModal
           theme={theme}
-          existingNames={jobs.map((j) => j.name)}
+          products={products}
           onImport={handleImportExcel}
           onClose={() => setExcelModal(false)}
         />

@@ -8,9 +8,10 @@ import { FileDown, Upload, X } from 'lucide-react';
 import {
   OPTIONAL_COLUMNS, REQUIRED_COLUMNS, downloadJobTemplate, parseJobWorkbook,
 } from '../../lib/jobExcel.js';
+import { fmtDuration } from '../../lib/format.js';
 import { GhostButton, Modal } from '../ui.jsx';
 
-const ExcelUploadModal = ({ theme, existingNames, onImport, onClose }) => {
+const ExcelUploadModal = ({ theme, products, onImport, onClose }) => {
   const [state, setState] = useState({ status: 'idle' }); // idle | parsing | done | error
   const [checked, setChecked] = useState(new Set());
   const [dragOver, setDragOver] = useState(false);
@@ -20,7 +21,7 @@ const ExcelUploadModal = ({ theme, existingNames, onImport, onClose }) => {
     if (!file) return;
     setState({ status: 'parsing', fileName: file.name });
     try {
-      const result = await parseJobWorkbook(file, existingNames);
+      const result = await parseJobWorkbook(file, products);
       setState({ status: 'done', fileName: file.name, ...result });
       setChecked(new Set(result.rows.filter((r) => r.valid).map((r) => r.excelRow)));
     } catch (e) {
@@ -140,7 +141,7 @@ const ExcelUploadModal = ({ theme, existingNames, onImport, onClose }) => {
                 <table className="w-full text-[11px]">
                   <thead className={`sticky top-0 ${theme.headerBg}`}>
                     <tr className={`border-b ${theme.divider}`}>
-                      {['', '행', '작업명', '수량', '표준시간', '설비', '검증'].map((h) => (
+                      {['', '행', '품목명', '수량', '택트', '표준시간', '검증'].map((h) => (
                         <th key={h} className={`px-2 py-1.5 text-left font-semibold ${theme.textMuted}`}>{h}</th>
                       ))}
                     </tr>
@@ -161,10 +162,15 @@ const ExcelUploadModal = ({ theme, existingNames, onImport, onClose }) => {
                           />
                         </td>
                         <td className={`px-2 py-1.5 tabular-nums ${theme.textFaint}`}>{r.excelRow}</td>
-                        <td className={`px-2 py-1.5 ${theme.textPrimary}`}>{r.name || <span className="text-red-500">—</span>}</td>
+                        <td className={`px-2 py-1.5 ${theme.textPrimary}`}>
+                          {r.name || <span className="text-red-500">—</span>}
+                          {r.name && r.valid && !r.knownProduct && (
+                            <span className={`ml-1.5 px-1 py-0.5 rounded text-[9px] border ${theme.chip}`}>신규 등록</span>
+                          )}
+                        </td>
                         <td className={`px-2 py-1.5 tabular-nums ${theme.textSecondary}`}>{r.qty || '—'}</td>
-                        <td className={`px-2 py-1.5 tabular-nums ${theme.textSecondary}`}>{r.minutes ? `${r.minutes}분` : '—'}</td>
-                        <td className={`px-2 py-1.5 ${theme.textFaint}`}>{r.equipment || '—'}</td>
+                        <td className={`px-2 py-1.5 tabular-nums ${theme.textSecondary}`}>{r.taktSec ? `${r.taktSec}s` : '—'}</td>
+                        <td className={`px-2 py-1.5 tabular-nums ${theme.textSecondary}`}>{r.totalSec ? fmtDuration(r.totalSec) : '—'}</td>
                         <td className="px-2 py-1.5">
                           {r.valid
                             ? <span className="text-emerald-500">정상</span>
@@ -182,7 +188,7 @@ const ExcelUploadModal = ({ theme, existingNames, onImport, onClose }) => {
 
       <footer className={`flex items-center justify-between px-5 py-3 border-t ${theme.panelBorder} ${theme.subtleBg}`}>
         <span className={`text-[11px] ${theme.textMuted}`}>
-          {selected.length > 0 ? `${selected.length}개 작업이 대기열에 추가됩니다.` : '추가할 행을 선택하세요.'}
+          {selected.length > 0 ? `${selected.length}개 로트가 대기열에 추가됩니다.` : '추가할 행을 선택하세요.'}
         </span>
         <div className="flex items-center gap-2">
           <button

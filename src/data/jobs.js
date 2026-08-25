@@ -1,46 +1,66 @@
 /**
  * =============================================================================
- *  작업 대기열 초기 데이터 / 발번 / 단계 분류
+ *  생산 오더(로트) 모델 — 품목 카탈로그 / 로트 발번 / 파이프라인 단계
  * =============================================================================
+ *  이 라인은 6개 설비가 하나의 사이클로 묶인 '흐름 생산'이다. 그래서 작업지시는
+ *  공정 단위가 아니라 **로트(품목 + 수량)** 단위다 — 로트의 1 EA 가 라인 1사이클을
+ *  타고 개포장 → 이송 → 충전 → 검사 파이프라인을 순서대로 통과한다.
+ *
+ *  표준시간 = 수량 × 품목 택트타임(초/EA). 라인은 대기열 맨 위 로트부터 흘린다.
+ * ---------------------------------------------------------------------------
  */
 import { FACTORY_ASSETS, PRODUCTION_LINES } from './factoryAssets.js';
 
 /**
- * 작업지시 번호 발번.
- *  대기열 '길이'로 번호를 만들면 작업을 취소한 뒤 추가할 때 이미 쓴 번호가 다시
- *  나온다(취소로 5→4건이 된 뒤 추가하면 또 005). React key 가 겹치고 목록이
- *  깨지므로, 지금까지 쓴 가장 큰 번호에서 이어 붙인다.
+ * 로트 번호 발번.
+ *  대기열 '길이'로 번호를 만들면 취소 후 추가 시 이미 쓴 번호가 다시 나온다.
+ *  지금까지 쓴 가장 큰 번호에서 이어 붙인다. (1호기 001~, 2호기 101~)
  */
-export const makeJobId = (seq) => `WO-2607-${String(seq).padStart(3, '0')}`;
-export const nextJobSeq = (jobs) =>
-  jobs.reduce((max, j) => Math.max(max, Number(String(j.id).split('-').pop()) || 0), 0) + 1;
-
-/* 작업 카탈로그 — '작업 추가' 팝업에서 선택하거나 새로 등록한다 */
-export const INITIAL_JOB_TEMPLATES = [
-  { id: 'TPL-01', name: 'HPG 원자재 개포장', qty: 120, totalSec: 900 },
-  { id: 'TPL-02', name: 'HPG 원자재 이송', qty: 80, totalSec: 720 },
-  { id: 'TPL-03', name: '실린더 충전 (CART-01)', qty: 240, totalSec: 1500 },
-  { id: 'TPL-04', name: '충전 후 계량/검사', qty: 36, totalSec: 480 },
-  { id: 'TPL-05', name: '공(空)실린더 회수/세척', qty: 60, totalSec: 600 },
-];
-
-const INITIAL_JOB_SPECS = [
-  { name: 'HPG 원자재 개포장', qty: 120, totalSec: 900, state: 'RUNNING' },
-  { name: 'HPG 원자재 이송', qty: 80, totalSec: 720, state: 'IDLE' },
-  { name: '실린더 충전 (CART-01)', qty: 240, totalSec: 1500, state: 'IDLE' },
-  { name: '충전 후 계량/검사', qty: 36, totalSec: 480, state: 'ERROR' },
-  { name: '공(空)실린더 회수/세척', qty: 60, totalSec: 600, state: 'IDLE' },
-];
+export const makeLotId = (seq) => `LOT-2608-${String(seq).padStart(3, '0')}`;
+export const nextLotSeq = (lots) =>
+  lots.reduce((max, l) => Math.max(max, Number(String(l.id).split('-').pop()) || 0), 0) + 1;
 
 /**
- * 라인마다 자기 대기열을 갖는다. 라인은 같은 설비 구성이라 작업 종류도 같지만,
- * 지시 번호는 라인끼리 겹치지 않게 100번대씩 띄운다 (1호기 001~, 2호기 101~).
+ * 품목 카탈로그 — '로트 추가' 팝업에서 선택하거나 새로 등록한다.
+ *  taktSec 은 이 품목을 만들 때 라인 1사이클(제품 1개)에 걸리는 초.
+ *  3D 애니메이션 재생 배속도 이 값에서 나온다 (7.2s 클립을 택트에 맞춤).
  */
-const makeInitialJobs = (lineIndex) =>
-  INITIAL_JOB_SPECS.map((spec, i) => ({ id: makeJobId(lineIndex * 100 + i + 1), ...spec }));
+export const INITIAL_PRODUCT_CATALOG = [
+  { id: 'PRD-01', name: 'HPG 실린더 6L', taktSec: 7.5, defaultQty: 120 },
+  { id: 'PRD-02', name: 'HPG 실린더 10L', taktSec: 9.0, defaultQty: 80 },
+  { id: 'PRD-03', name: 'HPG 실린더 20L', taktSec: 12.5, defaultQty: 60 },
+  { id: 'PRD-04', name: 'HPG 카트리지 리필', taktSec: 6.3, defaultQty: 240 },
+];
+
+/** 품목 + 수량 → 로트. id 는 호출부에서 발번해서 넣는다. */
+export const makeLot = (id, product, qty, state = 'IDLE') => ({
+  id,
+  productId: product.id ?? null,
+  name: product.name,
+  qty,
+  taktSec: product.taktSec,
+  totalSec: Math.max(1, Math.round(product.taktSec * qty)),
+  state,
+});
+
+const INITIAL_LOT_SPECS = [
+  { productIdx: 0, qty: 120, state: 'RUNNING' },
+  { productIdx: 1, qty: 80, state: 'IDLE' },
+  { productIdx: 3, qty: 240, state: 'IDLE' },
+];
+
+const makeInitialLots = (lineIndex) =>
+  INITIAL_LOT_SPECS.map((spec, i) =>
+    makeLot(
+      makeLotId(lineIndex * 100 + i + 1),
+      INITIAL_PRODUCT_CATALOG[spec.productIdx],
+      spec.qty,
+      spec.state
+    )
+  );
 
 export const INITIAL_JOBS_BY_LINE = Object.fromEntries(
-  PRODUCTION_LINES.map((line, i) => [line.id, makeInitialJobs(i)])
+  PRODUCTION_LINES.map((line, i) => [line.id, makeInitialLots(i)])
 );
 
 /** 설비 배치도 라인별로 따로 관리한다 — 한쪽에서 옮겨도 다른 라인은 그대로다 */
@@ -52,18 +72,22 @@ export const INITIAL_OFFSETS_BY_LINE = Object.fromEntries(
 );
 
 /**
- * 생산 라인 4단계.
- *  대기열의 작업을 이름으로 단계에 배정해 단계별 진행률을 낸다.
- *  판정 순서가 표시 순서와 다른 이유: "충전 후 계량/검사" 처럼 두 단어가 겹치는
- *  작업이 있어서, 더 좁은 규칙(검사)을 넓은 규칙(충전)보다 먼저 본다.
+ * 파이프라인 단계 — 로트의 각 EA 가 순서대로 통과하는 공정.
+ *  단계 사이에는 1사이클의 지연이 있다(앞 EA 가 다음 단계로 넘어가는 동안
+ *  뒤 EA 가 앞 단계에 들어온다). 단계별 완료 수 = clamp(투입 EA − 단계 지연).
  */
-export const STAGE_ORDER = ['개포장', '이송', '충전', '검사'];
-export const stageOf = (name = '') => {
-  if (/개포장|절단/.test(name)) return '개포장';
-  if (/검사|계량/.test(name)) return '검사';
-  if (/충전/.test(name)) return '충전';
-  if (/이송|회수|세척/.test(name)) return '이송';
-  return null; // 어느 단계에도 속하지 않는 작업은 집계에서 뺀다
+export const PIPELINE_STAGES = ['개포장', '이송', '충전', '검사'];
+
+/** 현재 로트의 단계별 완료 수량 (elapsed 초 기준) */
+export const pipelineProgress = (lot, elapsed) => {
+  if (!lot || !(lot.taktSec > 0) || !(lot.qty > 0)) {
+    return PIPELINE_STAGES.map((name) => ({ name, done: null, value: null }));
+  }
+  const started = Math.floor(elapsed / lot.taktSec); // 1단계 통과를 마친 EA 수
+  return PIPELINE_STAGES.map((name, i) => {
+    const done = Math.max(0, Math.min(lot.qty, started - i));
+    return { name, done, value: (done / lot.qty) * 100 };
+  });
 };
 
 export const CCTV_FEEDS = [

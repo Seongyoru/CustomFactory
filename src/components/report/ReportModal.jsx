@@ -250,7 +250,7 @@ const ReportModal = ({
             <div className="grid grid-cols-5 gap-2">
               {[
                 ['금일 생산량', kpis.qty > 0 ? `${kpis.qty} EA` : '—'],
-                ['완료 작업', kpis.jobs > 0 ? `${kpis.jobs}건` : '—'],
+                ['완료 로트', kpis.jobs > 0 ? `${kpis.jobs}건` : '—'],
                 ['불량률', kpis.defectRate == null ? '—' : `${(kpis.defectRate * 100).toFixed(1)}%`],
                 ['계획 달성률', pct(kpis.achieve)],
                 ['금일 알람', `${kpis.alarms}건`],
@@ -299,7 +299,7 @@ const ReportModal = ({
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
                   <tr className={`border-b ${theme.divider}`}>
-                    {['완료 시각', '라인', '작업명', '수량', '불량', '계획', '실적', '달성률'].map((h) => (
+                    {['완료 시각', '라인', '품목', '수량', '불량', '계획', '실적', '달성률'].map((h) => (
                       <th key={h} className={th}>{h}</th>
                     ))}
                   </tr>
@@ -307,7 +307,7 @@ const ReportModal = ({
                 <tbody>
                   {production.length === 0 && (
                     <tr><td colSpan={8} className={`px-3 py-6 text-center ${theme.textFaint}`}>
-                      아직 완료된 작업이 없습니다. 라인이 돌면 실적이 여기에 쌓입니다.
+                      아직 완료된 로트가 없습니다. 라인이 돌면 실적이 여기에 쌓입니다.
                     </td></tr>
                   )}
                   {production.slice(0, 50).map((p) => {

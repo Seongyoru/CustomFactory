@@ -20,7 +20,7 @@ export async function downloadReportWorkbook({ production, events, lineStats, oe
 
   /* 1) 생산 실적 */
   const prodRows = [
-    ['완료 시각', '라인', '지시 번호', '작업명', '수량(EA)', '불량(EA)', '계획(초)', '실적(초)', '달성률(%)'],
+    ['완료 시각', '라인', '로트 번호', '품목', '수량(EA)', '불량(EA)', '계획(초)', '실적(초)', '달성률(%)'],
     ...production.map((p) => [
       fmtIso(p.finishedAt),
       lineName(p.lineId),

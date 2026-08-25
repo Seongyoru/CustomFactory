@@ -706,15 +706,17 @@ function SceneContents({
     <>
       {import.meta.env.DEV && <DebugBridge />}
 
+      {/* 라이트 모드 광량을 다크와 비슷한 체감으로 맞춘다 — 밝은 배경 위에서
+          광량까지 세면 설비가 원본보다 하얗게 떠 보인다. 색은 무채색 배경에 맞춰 중립. */}
       <hemisphereLight
-        args={isLight ? ['#ffffff', '#cbd5e1', 2.0] : ['#dbeafe', '#0f172a', 1.1]}
+        args={isLight ? ['#ffffff', '#d4d4d4', 1.2] : ['#dbeafe', '#0f172a', 1.1]}
         />
-      <ambientLight intensity={isLight ? 0.9 : 0.55} />
-      <directionalLight position={[12, 20, 8]} intensity={isLight ? 1.8 : 1.5} />
+      <ambientLight intensity={isLight ? 0.55 : 0.55} />
+      <directionalLight position={[12, 20, 8]} intensity={isLight ? 1.35 : 1.5} />
       <directionalLight
         position={[-14, 10, -10]}
-        intensity={0.5}
-        color={isLight ? '#e0f2fe' : '#93c5fd'}
+        intensity={0.4}
+        color={isLight ? '#f0f0f0' : '#93c5fd'}
       />
 
       {showGrid && (

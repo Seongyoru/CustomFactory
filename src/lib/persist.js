@@ -14,7 +14,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 const NS = 'egis-dt';
-const VERSION = 'v1';
+/* v2: 작업 대기열이 공정 단위 작업 → 로트(품목+수량) 모델로 전면 개편됨.
+   v1 데이터(taktSec 없는 작업, 작업명 기반 단계 분류)는 새 화면과 호환되지 않는다. */
+const VERSION = 'v2';
 const keyOf = (key) => `${NS}.${VERSION}.${key}`;
 
 export function readStore(key, fallback) {

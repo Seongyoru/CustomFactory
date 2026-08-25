@@ -17,14 +17,14 @@ const JobCancelModal = ({ theme, job, isCurrent, onConfirm, onCancel }) => (
           <Trash2 className="w-5 h-5" />
         </span>
         <div className="min-w-0">
-          <h3 className={`text-base font-bold ${theme.textPrimary}`}>작업 취소</h3>
+          <h3 className={`text-base font-bold ${theme.textPrimary}`}>로트 취소</h3>
           <p className={`text-[11px] mt-0.5 tabular-nums ${theme.textMuted}`}>{job.id}</p>
         </div>
       </div>
 
       <p className={`mt-4 text-[12px] leading-relaxed ${theme.textSecondary}`}>
-        <span className={`font-semibold ${theme.textPrimary}`}>{job.name}</span> 을(를) 대기열에서 제거합니다.
-        {isCurrent && ' 진행 중인 작업이라 현재 공정이 즉시 중단되고 다음 작업이 올라옵니다.'}
+        <span className={`font-semibold ${theme.textPrimary}`}>{job.name}</span> 로트를 대기열에서 제거합니다.
+        {isCurrent && ' 지금 라인을 흐르고 있는 로트라 현재 공정이 즉시 중단되고 다음 로트가 올라옵니다.'}
         {' 되돌릴 수 없습니다.'}
       </p>
 
@@ -50,7 +50,7 @@ const JobCancelModal = ({ theme, job, isCurrent, onConfirm, onCancel }) => (
           onClick={onConfirm}
           className="h-10 rounded-lg bg-red-600 hover:bg-red-500 text-[12px] font-bold text-white"
         >
-          작업 취소
+          로트 취소
         </button>
       </div>
     </div>

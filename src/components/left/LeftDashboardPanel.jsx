@@ -5,7 +5,7 @@
  */
 import React, { useMemo, useRef, useState } from 'react';
 import { FastForward, Gauge, GripVertical, Layers, Plus, Settings2, Trash2, Upload, X } from 'lucide-react';
-import { STAGE_ORDER, stageOf } from '../../data/jobs.js';
+import { pipelineProgress } from '../../data/jobs.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
@@ -38,34 +38,11 @@ const LeftDashboardPanel = ({
   }, [currentJob, elapsed, speed, now]);
 
   /**
-   * 단계별 진행률 — 대기열에서 실제로 계산한다.
-   *  분모: 그 단계에 배정된 대기열 작업들의 표준시간 합.
-   *  분자: 라인 경과시간을 그 단계 물량에 순서대로 채운 값.
-   *
-   *  4개 단계는 순차가 아니라 동시에 돈다(3D 에서도 컨베이어·절단·카트·충전이
-   *  한 사이클 안에서 함께 움직인다). 그래서 선두 작업의 단계만 움직이게 하지 않고
-   *  같은 라인 시계를 네 단계에 모두 적용한다.
-   *  결과적으로 물량이 적은 단계는 빨리 차고, 작업을 추가하면 분모가 늘어 값이 내려간다.
-   *  작업이 하나도 없는 단계는 '—' 로 비워 둔다.
+   * 파이프라인 단계 진행률 — 현재 로트가 개포장→이송→충전→검사를 통과하는 현황.
+   *  각 EA 는 단계를 순서대로 지나가고 단계 사이에 1사이클 지연이 있으므로,
+   *  앞 단계 완료 수 ≥ 뒷 단계 완료 수가 항상 성립한다(둘의 차이가 재공품).
    */
-  const stages = useMemo(() => {
-    const acc = Object.fromEntries(STAGE_ORDER.map((s) => [s, { total: 0, count: 0 }]));
-    jobs.forEach((job) => {
-      const stage = stageOf(job.name);
-      if (!stage) return;
-      acc[stage].total += job.totalSec;
-      acc[stage].count += 1;
-    });
-    return STAGE_ORDER.map((name) => {
-      const { total, count } = acc[name];
-      return {
-        name,
-        count,
-        totalSec: total,
-        value: total > 0 ? Math.min(100, (Math.min(elapsed, total) / total) * 100) : null,
-      };
-    });
-  }, [jobs, elapsed]);
+  const stages = useMemo(() => pipelineProgress(currentJob, elapsed), [currentJob, elapsed]);
 
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
@@ -75,7 +52,7 @@ const LeftDashboardPanel = ({
           icon={Gauge}
           title="생산 라인 진행률"
           theme={theme}
-          hint="선두 작업의 진행률과 단계별 부하입니다. 작업이 완료되면 대기열이 전진하고 실적은 리포트에 쌓입니다."
+          hint="현재 로트의 진행률과, 각 EA가 개포장→이송→충전→검사 파이프라인을 통과하는 현황입니다. 로트가 완료되면 대기열이 전진하고 실적은 리포트에 쌓입니다."
           right={
             mode === 'simulation' && speed > 1 ? (
               /* 가속 중임을 한눈에 — 배속을 올리면 여기부터 달라진다 */
@@ -95,7 +72,7 @@ const LeftDashboardPanel = ({
                 {progress.toFixed(0)}<span className={`text-base ml-0.5 ${theme.textMuted}`}>%</span>
               </p>
               <p className={`mt-1 truncate text-[11px] ${theme.textFaint}`}>
-                현재 작업 · {currentJob?.name ?? '-'}
+                현재 로트 · {currentJob ? `${currentJob.name} (${currentJob.id})` : '-'}
               </p>
             </div>
             {/* 비상 정지 중에는 '작업 중' 대신 정지 상태를 보여준다 */}
@@ -133,16 +110,17 @@ const LeftDashboardPanel = ({
             ))}
           </div>
 
+          {/* 파이프라인 — 각 EA 가 단계를 순서대로 지나간다. 숫자는 그 단계를 마친 EA */}
           <ul className="space-y-2 pt-1">
-            {stages.map((s) => (
+            {stages.map((s, i) => (
               <li
                 key={s.name}
                 className="flex items-center gap-2"
-                title={s.count > 0
-                  ? `${s.name} · 작업 ${s.count}건 · 총 표준시간 ${fmtDuration(s.totalSec)}`
-                  : `${s.name} · 대기열에 작업 없음`}
+                title={s.done === null
+                  ? `${s.name} · 진행 중인 로트 없음`
+                  : `${s.name} · ${s.done} EA 완료${i > 0 && stages[i - 1].done > s.done ? ` · 재공 ${stages[i - 1].done - s.done} EA` : ''}`}
               >
-                <span className={`w-11 text-[11px] shrink-0 ${s.count > 0 ? theme.textMuted : theme.textGhost}`}>
+                <span className={`w-11 text-[11px] shrink-0 ${s.done !== null ? theme.textMuted : theme.textGhost}`}>
                   {s.name}
                 </span>
                 <span className={`flex-1 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
@@ -151,8 +129,8 @@ const LeftDashboardPanel = ({
                     style={{ width: `${s.value ?? 0}%`, transition: 'width 900ms linear' }}
                   />
                 </span>
-                <span className={`w-9 text-right text-[11px] tabular-nums ${s.value === null ? theme.textGhost : theme.textSecondary}`}>
-                  {s.value === null ? '—' : `${Math.round(s.value)}%`}
+                <span className={`w-14 text-right text-[11px] tabular-nums ${s.done === null ? theme.textGhost : theme.textSecondary}`}>
+                  {s.done === null ? '—' : `${s.done} EA`}
                 </span>
               </li>
             ))}
@@ -164,10 +142,10 @@ const LeftDashboardPanel = ({
       <Panel theme={theme} className="flex-1 min-h-[220px] flex flex-col" data-tour="queue">
         <PanelTitle
           icon={Layers}
-          title="작업 대기열"
+          title="생산 오더 대기열"
           theme={theme}
-          hint="맨 위 작업이 지금 생산 중입니다. 행을 드래그해 순서를 바꾸고, 클릭해 선택한 뒤 취소할 수 있습니다."
-          right={<span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{jobs.length} JOBS</span>}
+          hint="작업지시는 로트(품목+수량) 단위입니다. 맨 위 로트가 지금 라인을 흐르고 있고, 행을 드래그해 생산 순서를 바꿀 수 있습니다."
+          right={<span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{jobs.length} LOTS</span>}
         />
 
         <ul className="flex-1 overflow-y-auto p-2 space-y-1.5">
@@ -211,7 +189,7 @@ const LeftDashboardPanel = ({
               <div className="min-w-0 flex-1">
                 <p className={`truncate text-[12px] font-medium ${theme.textSecondary}`}>{job.name}</p>
                 <p className={`text-[10px] tabular-nums ${theme.textFaint}`}>
-                  {job.id} · {job.qty} EA · 표준 {fmtDuration(job.totalSec)}
+                  {job.id} · {job.qty} EA · 택트 {job.taktSec ?? (job.qty > 0 ? (job.totalSec / job.qty).toFixed(1) : '-')}s · {fmtDuration(job.totalSec)}
                 </p>
               </div>
               {/* 정지 중이면 돌고 있던 작업만 '작업 중지'로 — 대기 작업은 원래대로 대기다 */}
@@ -240,7 +218,7 @@ const LeftDashboardPanel = ({
             icon={Plus} theme={theme} onClick={onOpenJobAdd}
             disabled={!canManageJobs} title={!canManageJobs ? manageHint : undefined}
           >
-            작업 추가
+            로트 추가
           </GhostButton>
           <GhostButton
             icon={Upload} theme={theme} onClick={onOpenExcel}
