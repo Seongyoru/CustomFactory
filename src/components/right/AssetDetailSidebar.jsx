@@ -104,11 +104,19 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
 const AssetDetailSidebar = ({
   theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo,
   memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry, lineTaktSec = PROCESS_CYCLE_SEC,
+  cylinder,
 }) => {
   const [memoDraft, setMemoDraft] = useState('');
   const [historyOpen, setHistoryOpen] = useState(true);
 
   const open = Boolean(asset);
+  /* 카트는 실린더 만충 현황을 라이브로 보여준다 (마스터의 고정 문구 대신) */
+  const isCart = asset?.id === 'CART_UNIT';
+  const cartLiveMessage = isCart && cylinder
+    ? cylinder.active
+      ? `실린더 충전 중 (${cylinder.fill}/${cylinder.capacity}) · 만충 시 자동 반출`
+      : '실린더 대기 (진행 중인 로트 없음)'
+    : null;
   /**
    * 표시 상태의 우선순위: 설비 오류 > 라인 비상 정지 > 마스터 상태.
    * 오류가 더 구체적이고 조치가 필요한 정보라 정지보다 앞선다.
@@ -119,7 +127,7 @@ const AssetDetailSidebar = ({
     ? `[${fault.code}] ${fault.title}`
     : lineStopped
       ? '비상 정지로 라인 인터록 작동 중'
-      : asset?.statusMessage ?? '-';
+      : cartLiveMessage ?? asset?.statusMessage ?? '-';
 
   const submitMemo = () => {
     const text = memoDraft.trim();
@@ -170,6 +178,30 @@ const AssetDetailSidebar = ({
               <p className={`text-[11px] truncate ${theme.textMuted}`}>{statusMessage}</p>
             </div>
           </div>
+
+          {/* 실린더 현황 — 카트 전용. 1세트 = 1회 충전, 만충 시 자동 반출 */}
+          {isCart && cylinder && (
+            <div className={`mt-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className={theme.textMuted}>실린더 충전</span>
+                <span className={`font-bold tabular-nums ${cylinder.active ? theme.accentText : theme.textGhost}`}>
+                  {cylinder.active ? `${cylinder.fill} / ${cylinder.capacity}` : '—'}
+                </span>
+              </div>
+              <div className="mt-1.5 flex gap-0.5">
+                {Array.from({ length: cylinder.capacity }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-2.5 flex-1 rounded-sm transition-colors duration-300 ${i < cylinder.fill ? '' : theme.trackBg}`}
+                    style={i < cylinder.fill ? { backgroundColor: theme.accentHex } : undefined}
+                  />
+                ))}
+              </div>
+              <p className={`mt-1.5 text-[10px] tabular-nums ${theme.textGhost}`}>
+                1세트마다 1회 충전 · 만충 시 자동 반출 후 새 실린더 · 누적 반출 {cylinder.discharged}개
+              </p>
+            </div>
+          )}
 
           {/* 오류 상세 — 알람으로 올라온 내용을 설비 화면에서 다시 확인한다 */}
           {fault && (

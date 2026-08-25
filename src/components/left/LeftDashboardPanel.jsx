@@ -12,11 +12,38 @@ import {
 } from '../../lib/format.js';
 import { GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 
+/**
+ * 실린더 충전 게이지 — 1세트마다 1칸씩 차고, 가득 차면 반출 후 새 실린더로 비워진다.
+ * (공정 개요 5번: 실린더는 여러 세트에 걸쳐 충전돼 만충 시 뒤로 반출)
+ */
+const CylinderGauge = ({ theme, cylinder }) => (
+  <div
+    className="flex items-center gap-2"
+    title={cylinder.active
+      ? `실린더 충전 ${cylinder.fill}/${cylinder.capacity}회 · 만충 시 자동 반출 · 누적 반출 ${cylinder.discharged}개`
+      : '진행 중인 로트가 없습니다'}
+  >
+    <span className={`w-11 text-[11px] shrink-0 ${cylinder.active ? theme.textMuted : theme.textGhost}`}>실린더</span>
+    <span className="flex-1 flex gap-0.5">
+      {Array.from({ length: cylinder.capacity }).map((_, i) => (
+        <span
+          key={i}
+          className={`h-2 flex-1 rounded-sm transition-colors duration-300 ${i < cylinder.fill ? '' : theme.trackBg}`}
+          style={i < cylinder.fill ? { backgroundColor: theme.accentHex } : undefined}
+        />
+      ))}
+    </span>
+    <span className={`w-14 text-right text-[11px] tabular-nums ${cylinder.active ? theme.textSecondary : theme.textGhost}`}>
+      {cylinder.active ? `${cylinder.fill}/${cylinder.capacity}` : '—'}
+    </span>
+  </div>
+);
+
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
   selectedJobId, onSelectJob, onReorderJobs,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
-  todayQty = 0,
+  todayQty = 0, cylinder,
   canManageJobs = true, manageHint,
 }) => {
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
@@ -147,7 +174,16 @@ const LeftDashboardPanel = ({
             ))}
           </div>
 
-          {/* 단계별(개포장/이송/충전/검사) 집계는 두지 않는다 — 1세트 단위 흐름 공정 */}
+          {/* 단계별(개포장/이송/충전/검사) 집계는 두지 않는다 — 1세트 단위 흐름 공정.
+              대신 실린더 만충 현황을 보여준다: 1세트 = 1회 충전, 8회에 만충 → 반출 */}
+          {cylinder && (
+            <div className="pt-1 space-y-1">
+              <CylinderGauge theme={theme} cylinder={cylinder} />
+              <p className={`pl-[52px] text-[10px] tabular-nums ${theme.textGhost}`}>
+                만충 시 자동 반출 · 누적 반출 {cylinder.discharged}개
+              </p>
+            </div>
+          )}
         </div>
       </Panel>
 

@@ -326,6 +326,14 @@ export const FAULT_SCENARIOS = [
  *    (PhysCamera001.Target)이 대상이라 재생 대상이 아닙니다.
  *    재생은 오직 "TOTAL" 클립만 합니다.
  * ------------------------------------------------------------------------- */
+/**
+ * 실린더 용량 — 공정 개요 5번 참조.
+ *  1세트(원자재 1개 통과)마다 폴리 로봇이 실린더에 1회 충전하고,
+ *  이 횟수가 차면 실린더는 만충으로 뒤로 반출된다. 카트 상태 "충전 중 (n/8)"의 n 은
+ *  누적 세트 수에서 유도한다 (별도 카운터를 두지 않아 어긋나지 않는다).
+ */
+export const CYLINDER_CAPACITY = 8;
+
 export const CLIP_SEC = 7.2; // GLB "TOTAL" 클립 원본 길이
 export const SEQUENCE_DELAY_SEC = 2.17; // 컨베이어 정지(3.17s) − 로봇 구움 시작(1.00s)
 export const PROCESS_CYCLE_SEC = CLIP_SEC + SEQUENCE_DELAY_SEC; // 라인 1사이클 = 9.37s
