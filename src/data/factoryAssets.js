@@ -314,13 +314,10 @@ export const FAULT_SCENARIOS = [
  *    POLY_ROBOT           4.67 ~ 7.20s
  *    POPUP_UNIT           5.00 ~ 6.73s
  *
- *  실제 공정은 "컨베이어가 이재 로봇 앞에 도착해 **정지한 뒤**" 로봇이 집습니다.
- *  그래서 GLB 를 다시 굽지 않고 재생 시각을 설비별로 매핑합니다:
- *   - 컨베이어는 라인 사이클 시각 그대로 재생
- *   - 나머지 전 설비는 SEQUENCE_DELAY_SEC(=3.17−1.00=2.17s) 만큼 늦춰 재생
- *  이렇게 하면 로봇이 정확히 컨베이어 정지 시점(3.17s)에 움직이기 시작하고,
- *  로봇→절단기→폴리/카트/팝업 사이에 구워진 인수인계 타이밍은 그대로 유지됩니다.
- *  라인 1사이클은 클립 7.2s + 지연 2.17s = 9.37s 가 됩니다.
+ *  실제 공정은 "컨베이어 1회 도착 = 적재 원자재 여러 개 = 충전 여러 회 =
+ *  실린더 1개"의 세트 반복 구조다 (키프레임 명세: 현장 확인 2026-08-25).
+ *  클립을 통짜로 돌리지 않고 설비별 세그먼트 스케줄(ANIMATION_SCHEDULE)로
+ *  재생한다 — 아래 정의 참조.
  *
  *  ※ FENCE_UNIT 의 "All Animations"(8.0s)는 3ds Max 카메라 타깃
  *    (PhysCamera001.Target)이 대상이라 재생 대상이 아닙니다.
@@ -334,26 +331,109 @@ export const FAULT_SCENARIOS = [
  */
 export const CYLINDER_CAPACITY = 8;
 
-export const CLIP_SEC = 7.2; // GLB "TOTAL" 클립 원본 길이
-export const SEQUENCE_DELAY_SEC = 2.17; // 컨베이어 정지(3.17s) − 로봇 구움 시작(1.00s)
-export const PROCESS_CYCLE_SEC = CLIP_SEC + SEQUENCE_DELAY_SEC; // 라인 1사이클 = 9.37s
 export const ANIMATION_CLIP = 'TOTAL';
+export const CLIP_FPS = 30;
+export const CLIP_SEC = 216 / CLIP_FPS; // 7.2s — GLB "TOTAL" 클립 원본 길이(216f)
 
-/** 라인 사이클 시각 → 이 설비의 클립 재생 시각 (구간 밖은 양 끝 포즈에 고정) */
-export const clipTimeFor = (assetId, cycleTime) => {
-  const offset = assetId === 'CONVEYOR_UNIT' ? 0 : SEQUENCE_DELAY_SEC;
-  return Math.min(CLIP_SEC, Math.max(0, cycleTime - offset));
+/**
+ * 반복(세트) 횟수 = 컨베이어 1회 적재 원자재 개수 = 실린더 용량.
+ *  두 값이 같아야 "원자재 소진 → 실린더 만충 → 반출 → 빈 컨베이어 출발"이
+ *  한 사이클로 맞물린다. 모델에 실린 원자재 개수가 다르면 CYLINDER_CAPACITY 를
+ *  그 수로 맞추면 된다.
+ */
+export const FILL_REPEATS = CYLINDER_CAPACITY;
+export const REPEAT_PERIOD_F = 76; // 충전 1회 주기(프레임) — 폴리 로봇 사이클과 동일
+const REPEATS_END_F = 140 + FILL_REPEATS * REPEAT_PERIOD_F; // 748f — 마지막 충전 종료
+
+/**
+ * 설비별 재생 스케줄 (마스터 타임라인, 30fps 프레임 기준):
+ *
+ *   CONVEYOR   0~40 도착 후 정지 ────────────────────── [반복 끝] 50~95 출발
+ *   ROBOT              30~85 이재 ──×8 (76f 주기)
+ *   CUTTING                77~146 절단 ──×8
+ *   POLY                        140~216 충전 ──×8 (주기와 같아 연속)
+ *   CART                        140~175 진입 · 176~187 충전수용 ×8 · [끝] 188~203 반출
+ *   POPUP                          150~157 위치결정 고정 ──── [끝+7f] 195~202 리커버리
+ *
+ *  { label, at: 마스터 시작 프레임, from~to: 클립 프레임, repeat?: 반복 횟수 }
+ *  repeat 세그먼트는 at + k×REPEAT_PERIOD_F 마다 from~to 를 재생하고 남는 시간은
+ *  to 포즈로 대기한다. 세그먼트 사이/이전은 직전 포즈 고정. 첫 회차(k=0)는
+ *  구워진 원본 타임라인과 완전히 같아 회차 안의 설비 간 인수인계는 원본 안무
+ *  그대로다.
+ */
+export const ANIMATION_SCHEDULE = {
+  CONVEYOR_UNIT: [
+    { label: '원자재 도착', at: 0, from: 0, to: 40 },
+    { label: '컨베이어 출발', at: REPEATS_END_F, from: 50, to: 95 },
+  ],
+  LOAD_TRANSFER_ROBOT: [
+    { label: '원자재 이재', at: 30, from: 30, to: 85, repeat: FILL_REPEATS },
+  ],
+  CUTTING_UNIT: [
+    { label: '개포장 절단', at: 77, from: 77, to: 146, repeat: FILL_REPEATS },
+  ],
+  POLY_ROBOT: [
+    { label: '실린더 충전', at: 140, from: 140, to: 216, repeat: FILL_REPEATS },
+  ],
+  CART_UNIT: [
+    { label: '카트 진입', at: 140, from: 140, to: 175 },
+    { label: '충전 수용', at: 176, from: 176, to: 187, repeat: FILL_REPEATS },
+    { label: '만충 반출', at: REPEATS_END_F, from: 188, to: 203 },
+  ],
+  POPUP_UNIT: [
+    { label: '카트 위치 결정', at: 150, from: 150, to: 157 },
+    { label: '팝업 리커버리', at: REPEATS_END_F + 7, from: 195, to: 202 },
+  ],
 };
 
-/** 공정 단계 — '라인 사이클' 시각 기준 (지연 반영, 실제 공정 순서) */
-export const PROCESS_PHASES = [
-  { id: 'CONVEYOR_UNIT', label: '원자재 이송', start: 0.0, end: 3.17 },
-  { id: 'LOAD_TRANSFER_ROBOT', label: '원자재 이재', start: 3.17, end: 5.0 },
-  { id: 'CUTTING_UNIT', label: '개포장 절단', start: 4.74, end: 7.04 },
-  { id: 'CART_UNIT', label: '실린더 진입·반출', start: 6.84, end: 8.94 },
-  { id: 'POPUP_UNIT', label: '카트 위치 결정', start: 7.17, end: 8.9 },
-  { id: 'POLY_ROBOT', label: '실린더 충전', start: 6.84, end: 9.37 },
-];
+export const CYCLE_FRAMES = REPEATS_END_F + 45; // 793f — 컨베이어 출발(45f) 종료
+export const PROCESS_CYCLE_SEC = CYCLE_FRAMES / CLIP_FPS; // ≈26.43s = 실린더 1개(8세트)
+
+/** 라인 사이클 시각(초) → 이 설비의 클립 재생 시각(초) */
+export const clipTimeFor = (assetId, cycleTime) => {
+  const segs = ANIMATION_SCHEDULE[assetId];
+  if (!segs) return 0; // 스케줄 없는 배경 설비 — 첫 포즈 고정
+  const tF = cycleTime * CLIP_FPS;
+  let frame = segs[0].from; // 첫 세그먼트 시작 전 — 시작 포즈
+  for (const seg of segs) {
+    if (tF < seg.at) break;
+    const dur = seg.to - seg.from;
+    if (seg.repeat) {
+      const k = Math.min(seg.repeat - 1, Math.floor((tF - seg.at) / REPEAT_PERIOD_F));
+      const local = tF - (seg.at + k * REPEAT_PERIOD_F);
+      frame = seg.from + Math.min(dur, Math.max(0, local));
+    } else {
+      frame = seg.from + Math.min(dur, tF - seg.at);
+    }
+  }
+  return frame / CLIP_FPS;
+};
+
+/** 사이클당 실가동 프레임 — 병목 분석의 근거 */
+export const busyFramesOf = (assetId) =>
+  (ANIMATION_SCHEDULE[assetId] ?? []).reduce(
+    (sum, seg) => sum + (seg.repeat ?? 1) * (seg.to - seg.from),
+    0
+  );
+
+/** 반복 포함 세그먼트의 마스터 타임라인상 마지막 프레임 */
+const segSpanEndF = (seg) =>
+  seg.repeat
+    ? seg.at + (seg.repeat - 1) * REPEAT_PERIOD_F + (seg.to - seg.from)
+    : seg.at + (seg.to - seg.from);
+
+/** 공정 단계 — HUD 표시용. 스케줄에서 파생하므로 수치가 어긋날 수 없다 */
+export const PROCESS_PHASES = Object.entries(ANIMATION_SCHEDULE)
+  .flatMap(([id, segs]) =>
+    segs.map((seg) => ({
+      id,
+      label: seg.repeat ? `${seg.label} ×${seg.repeat}` : seg.label,
+      start: +(seg.at / CLIP_FPS).toFixed(2),
+      end: +(segSpanEndF(seg) / CLIP_FPS).toFixed(2),
+      repeat: seg.repeat ?? null,
+    }))
+  )
+  .sort((a, b) => a.start - b.start || a.end - b.end);
 
 /** 현재 사이클 시각에 활성인 단계들 */
 export const activePhases = (t) => PROCESS_PHASES.filter((p) => t >= p.start && t <= p.end);

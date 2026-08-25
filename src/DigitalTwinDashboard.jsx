@@ -29,6 +29,7 @@ import { AlertOctagon } from 'lucide-react';
 
 import {
   FAULT_SCENARIOS,
+  FILL_REPEATS,
   PROCESS_CYCLE_SEC,
   PRODUCTION_LINES,
   SELECTABLE_ASSETS,
@@ -221,10 +222,11 @@ export default function DigitalTwinDashboard() {
    *  엑셀 업로드로 택트가 극단적인 작업이 들어와도 눈으로 볼 수 있게 비율을 제한한다.
    *  비상 정지된 라인은 paused 로 그 자리에 멈춘다.
    */
+  /* 애니메이션 1사이클 = 충전 8회(실린더 1개) = 8세트 → 8×택트에 맞춰 재생한다 */
   const taktOf = (job) =>
-    job?.taktSec > 0 ? job.taktSec : job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC;
+    job?.taktSec > 0 ? job.taktSec : job && job.qty > 0 ? job.totalSec / job.qty : PROCESS_CYCLE_SEC / FILL_REPEATS;
   const scaleOf = (takt) =>
-    Math.min(4, Math.max(0.1, PROCESS_CYCLE_SEC / takt)) * (mode === 'simulation' ? speed : 1);
+    Math.min(4, Math.max(0.1, PROCESS_CYCLE_SEC / (takt * FILL_REPEATS))) * (mode === 'simulation' ? speed : 1);
 
   /* 대기열이 빈 라인은 설비도 멈춘다 — 지시 없는 라인이 도는 건 부자연스럽다 */
   const animByLine = useMemo(

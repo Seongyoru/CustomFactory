@@ -194,8 +194,8 @@ function useProcessAnimation(object, animations, clock, assetId) {
 
   useFrame((state, delta) => {
     advanceProcessClock(clock, state, delta);
-    /* 라인 사이클 시각을 설비별 클립 시각으로 매핑한다 — 컨베이어는 그대로,
-       나머지는 SEQUENCE_DELAY_SEC 만큼 늦춰 '컨베이어 정지 후 시작'을 재현 */
+    /* 라인 사이클 시각을 설비별 클립 시각으로 매핑한다 — ANIMATION_SCHEDULE 이
+       도착·반복(충전 8회)·반출·출발 세그먼트를 정의한다 (factoryAssets 참조) */
     if (mixer) mixer.setTime(clipTimeFor(assetId, clock.time));
   });
 

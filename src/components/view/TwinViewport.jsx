@@ -52,7 +52,7 @@ const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused }) => {
           {PROCESS_PHASES.map((p) => {
             const on = processTime >= p.start && processTime <= p.end;
             return (
-              <div key={p.id} className="flex items-center gap-2">
+              <div key={`${p.id}-${p.label}`} className="flex items-center gap-2">
                 <span className={`w-[62px] shrink-0 text-[9px] truncate ${on ? theme.textPrimary : theme.textFaint}`}>
                   {p.label}
                 </span>

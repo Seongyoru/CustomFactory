@@ -7,27 +7,32 @@ import React, { useState } from 'react';
 import {
   ChevronDown, Cpu, GitCommitHorizontal, Save, Siren, StickyNote, Wrench, X,
 } from 'lucide-react';
-import { PROCESS_CYCLE_SEC, PROCESS_PHASES, STATUS } from '../../data/factoryAssets.js';
+import {
+  CLIP_FPS, CYCLE_FRAMES, FILL_REPEATS, PROCESS_CYCLE_SEC, SELECTABLE_ASSETS, STATUS, busyFramesOf,
+} from '../../data/factoryAssets.js';
 import { fmtClock, fmtDate, fmtKoDateTime } from '../../lib/format.js';
 import { ConsumableBar, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 import TelemetryPanel from './TelemetryPanel.jsx';
 
 /**
- * 병목 분석 — 라인 1사이클(TOTAL 7.2s 마스터 타임라인)에서 이 설비가 실제로
- * 움직이는 구간을 근거로, 사이클 점유율·여유율·병목 여부를 보여준다.
+ * 병목 분석 — 라인 1사이클(실린더 1개 = 충전 8회, ANIMATION_SCHEDULE 기준)에서
+ * 각 설비의 실가동 시간(반복 포함)을 비교해 병목을 판정한다.
  *  이 라인은 전 설비가 한 사이클로 묶인 흐름 생산이라 설비 단독 시뮬레이션은
- *  성립하지 않는다 — 대신 "누가 사이클을 가장 오래 붙잡는가"가 유효한 질문이다.
+ *  성립하지 않는다 — 대신 "누가 사이클을 가장 오래 일하는가"가 유효한 질문이다.
  */
 const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
-  const durOf = (p) => p.end - p.start;
-  const mine = PROCESS_PHASES.find((p) => p.id === asset.id) ?? null;
-  if (!mine) return null;
+  const myBusyF = busyFramesOf(asset.id);
+  if (!(myBusyF > 0)) return null;
 
-  const maxDur = Math.max(...PROCESS_PHASES.map(durOf));
-  const isBottleneck = durOf(mine) === maxDur;
-  const share = durOf(mine) / PROCESS_CYCLE_SEC; // 사이클 점유율
-  const busySec = lineTaktSec * share; // 현재 로트 택트 기준 실작동 시간
-  const pct = (t) => `${(t / PROCESS_CYCLE_SEC) * 100}%`;
+  const busyList = SELECTABLE_ASSETS.map((a) => ({
+    id: a.id,
+    name: a.nameKo,
+    busyF: busyFramesOf(a.id),
+  })).sort((a, b) => b.busyF - a.busyF);
+  const maxBusyF = busyList[0].busyF;
+  const isBottleneck = myBusyF === maxBusyF;
+  const share = myBusyF / CYCLE_FRAMES;
+  const busySec = myBusyF / CLIP_FPS;
 
   return (
     <Panel theme={theme}>
@@ -35,7 +40,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
         icon={GitCommitHorizontal}
         title="병목 분석"
         theme={theme}
-        hint="라인 1사이클 안에서 각 설비가 실제로 움직이는 구간입니다. 가장 오래 움직이는 설비가 라인 속도를 결정하는 병목입니다. 이 라인은 전 설비가 한 사이클로 묶여 있어 설비 단독 시뮬레이션은 성립하지 않습니다."
+        hint="라인 1사이클(실린더 1개 = 충전 8회) 동안 각 설비가 실제로 움직이는 시간을 반복 횟수까지 포함해 비교합니다. 가장 오래 일하는 설비가 라인 속도를 결정하는 병목입니다."
         right={
           isBottleneck ? (
             <span className="px-2 py-0.5 rounded text-[10px] font-bold border border-red-500/40 bg-red-500/10 text-red-500">
@@ -49,12 +54,12 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
         }
       />
       <div className="p-3 space-y-3">
-        {/* 수치 요약 */}
+        {/* 수치 요약 — 애니메이션 사이클 기준 */}
         <div className={`grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
           {[
             ['사이클 점유', `${Math.round(share * 100)}%`],
-            ['가동 구간', `${mine.start.toFixed(1)}–${mine.end.toFixed(1)}s`],
-            ['실작동/택트', `${busySec.toFixed(1)}s / ${lineTaktSec.toFixed(1)}s`],
+            ['실가동', `${busySec.toFixed(1)}s`],
+            ['사이클', `${PROCESS_CYCLE_SEC.toFixed(1)}s`],
           ].map(([k, v]) => (
             <div key={k}>
               <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
@@ -63,38 +68,41 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
           ))}
         </div>
 
-        {/* 전 설비 사이클 점유 간트 — 이 설비 강조, 병목 표시 */}
+        {/* 전 설비 실가동 비교 — 이 설비 강조, 병목 표시 */}
         <div className="space-y-1">
-          {[...PROCESS_PHASES].sort((a, b) => durOf(b) - durOf(a)).map((p) => {
-            const isMine = p.id === asset.id;
-            const isBn = durOf(p) === maxDur;
+          {busyList.map((b) => {
+            const isMine = b.id === asset.id;
+            const isBn = b.busyF === maxBusyF;
             return (
-              <div key={p.id} className="flex items-center gap-2" title={`${p.label} · ${durOf(p).toFixed(1)}s (${Math.round((durOf(p) / PROCESS_CYCLE_SEC) * 100)}%)`}>
-                <span className={`w-[62px] shrink-0 text-[9px] truncate ${isMine ? `font-bold ${theme.textPrimary}` : theme.textFaint}`}>
-                  {p.label}
+              <div
+                key={b.id}
+                className="flex items-center gap-2"
+                title={`${b.name} · 실가동 ${(b.busyF / CLIP_FPS).toFixed(1)}s (사이클의 ${Math.round((b.busyF / CYCLE_FRAMES) * 100)}%)`}
+              >
+                <span className={`w-[74px] shrink-0 text-[9px] truncate ${isMine ? `font-bold ${theme.textPrimary}` : theme.textFaint}`}>
+                  {b.name}
                 </span>
                 <span className={`relative flex-1 h-2 rounded-sm overflow-hidden ${theme.trackBg}`}>
                   <span
-                    className="absolute inset-y-0 rounded-sm"
+                    className="absolute inset-y-0 left-0 rounded-sm"
                     style={{
-                      left: pct(p.start),
-                      width: pct(durOf(p)),
+                      width: `${(b.busyF / CYCLE_FRAMES) * 100}%`,
                       backgroundColor: isBn ? '#ef4444' : theme.accentHex,
                       opacity: isMine ? 1 : 0.3,
                     }}
                   />
                 </span>
-                <span className={`w-8 text-right text-[9px] tabular-nums ${isBn ? 'font-bold text-red-500' : theme.textGhost}`}>
-                  {isBn ? '병목' : `${durOf(p).toFixed(1)}s`}
+                <span className={`w-9 text-right text-[9px] tabular-nums ${isBn ? 'font-bold text-red-500' : theme.textGhost}`}>
+                  {isBn ? '병목' : `${(b.busyF / CLIP_FPS).toFixed(1)}s`}
                 </span>
               </div>
             );
           })}
         </div>
 
-        <p className={`text-[10px] leading-relaxed ${theme.textGhost}`}>
-          병목 설비의 가동 시간을 줄여야 라인 전체 택트가 짧아집니다. 나머지 설비는
-          그만큼의 여유를 갖고 대기합니다.
+        <p className={`text-[10px] leading-relaxed tabular-nums ${theme.textGhost}`}>
+          실린더 1개 = 충전 {FILL_REPEATS}회 ≈ 현재 로트 기준 {(lineTaktSec * FILL_REPEATS).toFixed(0)}초.
+          병목 설비의 가동 시간을 줄여야 라인 전체가 빨라집니다.
         </p>
       </div>
     </Panel>
