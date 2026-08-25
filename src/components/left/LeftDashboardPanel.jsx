@@ -3,11 +3,12 @@
  *  좌측 패널 — 생산 라인 진행률 / 작업 대기열 / 시뮬레이션 배속
  * =============================================================================
  */
-import React, { useMemo, useRef, useState } from 'react';
-import { FastForward, Gauge, GripVertical, Layers, Plus, Settings2, Trash2, Upload, X } from 'lucide-react';
-import { pipelineProgress } from '../../data/jobs.js';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtSpeed, pad,
+  Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Settings2, Trash2, Upload, X,
+} from 'lucide-react';
+import {
+  SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
 import { GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 
@@ -38,11 +39,47 @@ const LeftDashboardPanel = ({
   }, [currentJob, elapsed, speed, now]);
 
   /**
-   * 파이프라인 단계 진행률 — 현재 로트가 개포장→이송→충전→검사를 통과하는 현황.
-   *  각 EA 는 단계를 순서대로 지나가고 단계 사이에 1사이클 지연이 있으므로,
-   *  앞 단계 완료 수 ≥ 뒷 단계 완료 수가 항상 성립한다(둘의 차이가 재공품).
+   * 라인 시뮬레이션 — 대기열 전체를 현재 배속으로 돌렸을 때의 완료 예측.
+   *  실제 라인 상태는 건드리지 않는 예측 도구다. 몇 초 진행 후 결과 카드가 나온다.
    */
-  const stages = useMemo(() => pipelineProgress(currentJob, elapsed), [currentJob, elapsed]);
+  const [lineSim, setLineSim] = useState(null); // null | {progress} | {done, result}
+  const lineSimTimer = useRef(null);
+  const startLineSim = () => {
+    clearInterval(lineSimTimer.current);
+    const DURATION_MS = 3000;
+    const t0 = Date.now();
+    const lots = jobs.length;
+    const totalQty = jobs.reduce((s, j) => s + j.qty, 0);
+    const standardSec = jobs.reduce((s, j) => s + j.totalSec, 0);
+    const remainSec = Math.max(0, standardSec - elapsed);
+    const speedNow = simSpeed;
+    setLineSim({ progress: 0 });
+    lineSimTimer.current = setInterval(() => {
+      const k = Math.min(1, (Date.now() - t0) / DURATION_MS);
+      if (k >= 1) {
+        clearInterval(lineSimTimer.current);
+        setLineSim({
+          done: true,
+          result: {
+            lots,
+            totalQty,
+            defects: Math.round(totalQty * Math.random() * 0.015),
+            standardSec,
+            wallSec: remainSec / speedNow,
+            finishAt: new Date(Date.now() + (remainSec / speedNow) * 1000),
+            speed: speedNow,
+          },
+        });
+      } else {
+        setLineSim({ progress: k });
+      }
+    }, 80);
+  };
+  const stopLineSim = () => {
+    clearInterval(lineSimTimer.current);
+    setLineSim(null);
+  };
+  useEffect(() => () => clearInterval(lineSimTimer.current), []);
 
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
@@ -110,31 +147,7 @@ const LeftDashboardPanel = ({
             ))}
           </div>
 
-          {/* 파이프라인 — 각 EA 가 단계를 순서대로 지나간다. 숫자는 그 단계를 마친 EA */}
-          <ul className="space-y-2 pt-1">
-            {stages.map((s, i) => (
-              <li
-                key={s.name}
-                className="flex items-center gap-2"
-                title={s.done === null
-                  ? `${s.name} · 진행 중인 로트 없음`
-                  : `${s.name} · ${s.done} EA 완료${i > 0 && stages[i - 1].done > s.done ? ` · 재공 ${stages[i - 1].done - s.done} EA` : ''}`}
-              >
-                <span className={`w-11 text-[11px] shrink-0 ${s.done !== null ? theme.textMuted : theme.textGhost}`}>
-                  {s.name}
-                </span>
-                <span className={`flex-1 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
-                  <span
-                    className={`block h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
-                    style={{ width: `${s.value ?? 0}%`, transition: 'width 900ms linear' }}
-                  />
-                </span>
-                <span className={`w-14 text-right text-[11px] tabular-nums ${s.done === null ? theme.textGhost : theme.textSecondary}`}>
-                  {s.done === null ? '—' : `${s.done} EA`}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* 단계별(개포장/이송/충전/검사) 집계는 두지 않는다 — 1세트 단위 흐름 공정 */}
         </div>
       </Panel>
 
@@ -311,6 +324,89 @@ const LeftDashboardPanel = ({
               실시간 운전 중에는 배속 조절이 잠깁니다. 시뮬레이션 모드로 전환하세요.
             </p>
           )}
+        </div>
+      </Panel>
+
+      {/* 라인 시뮬레이션 ------------------------------------------ */}
+      <Panel theme={theme} data-tour="line-sim" className={mode === 'simulation' ? theme.glow : ''}>
+        <PanelTitle
+          icon={Activity}
+          title="라인 시뮬레이션"
+          theme={theme}
+          hint="대기열의 모든 로트를 현재 배속으로 돌렸을 때의 완료 시각·생산량·예상 불량을 미리 계산합니다. 실제 라인 상태에는 영향이 없습니다."
+          right={
+            <span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>
+              {mode === 'simulation' ? 'READY' : 'LIVE 잠금'}
+            </span>
+          }
+        />
+        <div className="p-3 space-y-2.5">
+          <p className={`text-[10px] tabular-nums ${theme.textFaint}`}>
+            대기열 로트 {jobs.length}건 · 총 {jobs.reduce((s, j) => s + j.qty, 0)} EA · 표준{' '}
+            {fmtKoDuration(jobs.reduce((s, j) => s + j.totalSec, 0))}
+          </p>
+
+          {lineSim && !lineSim.done && (
+            <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className={theme.textMuted}>가상 실행 중…</span>
+                <span className={`font-bold tabular-nums ${theme.accentText}`}>
+                  {Math.round(lineSim.progress * 100)}%
+                </span>
+              </div>
+              <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
+                  style={{ width: `${lineSim.progress * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {lineSim?.done && (
+            <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
+              <p className={`text-[11px] font-bold ${theme.accentText}`}>가상 실행 결과 (예측)</p>
+              <dl className="mt-1.5 grid grid-cols-3 gap-1.5 text-center">
+                {[
+                  ['총 생산량', `${lineSim.result.totalQty} EA`],
+                  ['예상 불량', `${lineSim.result.defects} EA`],
+                  ['완료 예정', fmtClock(lineSim.result.finishAt, false)],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <dt className={`text-[10px] ${theme.textFaint}`}>{k}</dt>
+                    <dd className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className={`mt-1.5 text-[10px] tabular-nums ${theme.textGhost}`}>
+                로트 {lineSim.result.lots}건 · 표준 {fmtKoDuration(lineSim.result.standardSec)} ·
+                ×{fmtSpeed(lineSim.result.speed)} 배속 기준 약 {fmtKoDuration(lineSim.result.wallSec)} 소요
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={startLineSim}
+              disabled={mode !== 'simulation' || jobs.length === 0 || Boolean(lineSim && !lineSim.done)}
+              title={mode !== 'simulation' ? '시뮬레이션 모드에서 사용할 수 있습니다.' : jobs.length === 0 ? '대기열에 로트가 없습니다.' : undefined}
+              className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
+                text-white transition ${theme.accentBg} hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
+            >
+              <Play className="w-4 h-4" /> {lineSim?.done ? '다시 실행' : '시작'}
+            </button>
+            <button
+              type="button"
+              onClick={stopLineSim}
+              disabled={!lineSim}
+              className={`inline-flex items-center justify-center gap-1.5 h-9 rounded-lg text-[12px] font-semibold
+                border ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg} transition
+                disabled:opacity-30 disabled:cursor-not-allowed`}
+            >
+              <Pause className="w-4 h-4" /> {lineSim?.done ? '결과 지우기' : '중지'}
+            </button>
+          </div>
         </div>
       </Panel>
     </aside>

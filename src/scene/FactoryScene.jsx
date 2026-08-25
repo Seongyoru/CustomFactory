@@ -561,12 +561,29 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
     }
     controls.autoRotate = false; // 무빙 중에는 끄고, 도착하면 다시 켠다
 
-    /* 일반 라인 전환 — 0.9초 ease-in-out 무빙. 타깃도 같이 옮기므로
-       도착한 뒤의 회전(OrbitControls)은 새 라인 중심을 기준으로 돈다. */
+    /* 일반 라인 전환 — 0.9초 ease-in-out 무빙.
+       타깃은 '이전 타깃 + 평행이동'이 아니라 **새 라인의 기준 중심**
+       (origin + CAMERA_HOME.target)으로 정렬한다. 평행이동 방식은 설비 줌인·팬으로
+       타깃이 어긋난 상태에서 전환하면 그 어긋난 점이 새 라인으로 그대로 옮겨져
+       엉뚱한 곳을 중심으로 돌게 된다. 시점의 각도·거리(궤도 오프셋)는 유지한다. */
     const startPos = controls.object.position.clone();
     const startTgt = controls.target.clone();
-    const endPos = startPos.clone().add(delta);
-    const endTgt = startTgt.clone().add(delta);
+    const endTgt = new THREE.Vector3(
+      origin[0] + CAMERA_HOME.target[0],
+      origin[1] + CAMERA_HOME.target[1],
+      origin[2] + CAMERA_HOME.target[2]
+    );
+    /* 설비 줌인 상태(짧은 오프셋)로 라인 중심에 붙으면 설비 안에 파묻히므로,
+       그 경우엔 홈 시점의 오프셋으로 복원한다. */
+    let orbitOffset = startPos.clone().sub(startTgt);
+    if (orbitOffset.length() < 6) {
+      orbitOffset = new THREE.Vector3(
+        CAMERA_HOME.position[0] - CAMERA_HOME.target[0],
+        CAMERA_HOME.position[1] - CAMERA_HOME.target[1],
+        CAMERA_HOME.position[2] - CAMERA_HOME.target[2]
+      );
+    }
+    const endPos = endTgt.clone().add(orbitOffset);
     const DURATION_MS = 900;
     const t0 = performance.now();
     const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2);

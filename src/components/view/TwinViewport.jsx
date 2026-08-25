@@ -214,6 +214,7 @@ const TwinViewport = ({
           {/* 설비를 고르면 선택 + 카메라가 그 설비로 날아간다 (3D 클릭이 익숙지 않아도 접근 가능) */}
           <select
             value=""
+            data-tour="asset-quick"
             onChange={(e) => { if (e.target.value) onFocusAsset?.(e.target.value); e.target.value = ''; }}
             title="설비를 선택하면 카메라가 해당 설비로 이동합니다"
             className={`pointer-events-auto h-[26px] px-2 rounded-md border text-[10px] font-semibold cursor-pointer

@@ -71,24 +71,9 @@ export const INITIAL_OFFSETS_BY_LINE = Object.fromEntries(
   ])
 );
 
-/**
- * 파이프라인 단계 — 로트의 각 EA 가 순서대로 통과하는 공정.
- *  단계 사이에는 1사이클의 지연이 있다(앞 EA 가 다음 단계로 넘어가는 동안
- *  뒤 EA 가 앞 단계에 들어온다). 단계별 완료 수 = clamp(투입 EA − 단계 지연).
- */
-export const PIPELINE_STAGES = ['개포장', '이송', '충전', '검사'];
-
-/** 현재 로트의 단계별 완료 수량 (elapsed 초 기준) */
-export const pipelineProgress = (lot, elapsed) => {
-  if (!lot || !(lot.taktSec > 0) || !(lot.qty > 0)) {
-    return PIPELINE_STAGES.map((name) => ({ name, done: null, value: null }));
-  }
-  const started = Math.floor(elapsed / lot.taktSec); // 1단계 통과를 마친 EA 수
-  return PIPELINE_STAGES.map((name, i) => {
-    const done = Math.max(0, Math.min(lot.qty, started - i));
-    return { name, done, value: (done / lot.qty) * 100 };
-  });
-};
+/* ※ 단계별(개포장/이송/충전/검사) 수량 집계는 두지 않는다 — 이 공정은 1세트
+   단위 흐름 공정이라 원자재 1개가 라인 전체를 통과하는 것으로 센다.
+   (factoryAssets.js 공정 개요 참조. 단계 분해가 필요해지면 그때 다시 설계) */
 
 export const CCTV_FEEDS = [
   { id: 'CAM-01', label: 'Line_1 · 절단기 상부', src: '/cctv/cam-01.mp4' },

@@ -2,9 +2,15 @@
  * =============================================================================
  *  설비 마스터 데이터 (3D 씬 ↔ 우측 상세 패널 공용)
  * =============================================================================
- *  공정 개요 — HPG 라인
- *    HPG 원자재의 포장을 뜯고(Cutting) → 이송하여(Conveyor) →
- *    카트(Cart)에 실린 실린더에 충전하는 공정.
+ *  공정 개요 — HPG 라인 (1세트 단위 흐름 공정, 현장 확인 2026-08-25)
+ *   1. 컨베이어가 포장 원자재 여러 개를 싣고 이재 로봇 앞까지 이송한 뒤 정지한다
+ *   2. 이재(Load Transfer) 로봇이 원자재를 집어 절단기로 투입한다
+ *   3. 절단기가 포장을 절단하고 내용물을 준비된 버켓에 붓는다
+ *   4. 폴리 로봇이 그 버켓을 들어 카트 유닛에 실린 실린더에 충전한다
+ *   5. 카트가 정위치에 오면 팝업 유닛이 위치를 잡아 주고, 실린더는 여러 세트에
+ *      걸쳐 충전돼 가득 차면 뒤로 반출된다 (카트 상태 "충전 중 (n/8)"의 의미)
+ *   ※ 1세트 = 원자재 1개가 라인을 통과하는 단위. 실린더 만충은 세트 여러 번의
+ *     결과라서 공정을 단계별 수량으로 쪼개 세지 않는다.
  *
  *  좌표계 / 배치 원칙:
  *   - GLB 는 CAD(Autodesk ATF) 익스포트이며 업축(Y-up) 변환이 내장돼 있습니다.
@@ -66,7 +72,7 @@ export const FACTORY_ASSETS = [
     offset: [0, 0, 0],
     name: 'Cutting Unit',
     nameKo: '개포장 절단기',
-    role: 'HPG 원자재 포장 절단',
+    role: 'HPG 원자재 포장 절단 → 버켓 배출',
     sn: 'Z2R8C5G1N6Q7A3',
     maker: '동양에스텍',
     mfgDate: '2020.02',
@@ -91,7 +97,7 @@ export const FACTORY_ASSETS = [
     offset: [0, 0, 0],
     name: 'Conveyor Unit',
     nameKo: '원자재 이송 컨베이어',
-    role: '절단된 HPG 원자재 이송',
+    role: '포장 원자재 이송 (이재 로봇 앞 정지)',
     sn: 'CV-1200-2019-01187',
     maker: '한독시스템',
     mfgDate: '2019.08',
@@ -128,7 +134,7 @@ export const FACTORY_ASSETS = [
     alphaMaps: { '10 - Default': '/textures/CART_UNIT_01_A.jpg' },
     name: 'Cart Unit',
     nameKo: '실린더 충전 카트',
-    role: 'HPG 충전 실린더 적재/이송',
+    role: '실린더 적재 이송 · 만충 시 반출',
     sn: 'CRT-1600-2023-00074',
     maker: '대성로보틱스',
     mfgDate: '2023.03',
@@ -153,7 +159,7 @@ export const FACTORY_ASSETS = [
     offset: [0, 0, 0],
     name: 'Load Transfer Robot',
     nameKo: '원자재 이재 로봇',
-    role: '개포장된 HPG 원자재 파지 및 이송',
+    role: '포장 원자재 파지 → 절단기 투입',
     sn: 'LTR-2400-2022-00516',
     maker: '현대로보틱스',
     mfgDate: '2022.06',
@@ -177,7 +183,7 @@ export const FACTORY_ASSETS = [
     offset: [0, 0, 0],
     name: 'Poly Robot',
     nameKo: '실린더 충전 로봇',
-    role: '카트 실린더에 HPG 원자재 충전',
+    role: '버켓 파지 → 실린더 충전',
     sn: 'PLR-0900-2023-00248',
     maker: '두산로보틱스',
     mfgDate: '2023.09',
@@ -201,7 +207,7 @@ export const FACTORY_ASSETS = [
     offset: [0, 0, 0],
     name: 'Popup Unit',
     nameKo: '팝업 승강 유닛',
-    role: '컨베이어 상 자재 승강/이재 보조',
+    role: '카트 위치 결정(포지셔닝)',
     sn: 'PUU-2300-2024-00087',
     maker: '동양에스텍',
     mfgDate: '2024.01',
@@ -324,11 +330,11 @@ export const ANIMATION_CLIP = 'TOTAL';
 /** 공정 단계 — 애니메이션 시각으로 현재 진행 단계를 표시하는 데 쓴다 */
 export const PROCESS_PHASES = [
   { id: 'CONVEYOR_UNIT', label: '원자재 이송', start: 0.0, end: 3.17 },
-  { id: 'LOAD_TRANSFER_ROBOT', label: '이재', start: 1.0, end: 2.83 },
+  { id: 'LOAD_TRANSFER_ROBOT', label: '원자재 이재', start: 1.0, end: 2.83 },
   { id: 'CUTTING_UNIT', label: '개포장 절단', start: 2.57, end: 4.87 },
-  { id: 'CART_UNIT', label: '카트 적재', start: 4.67, end: 6.77 },
+  { id: 'CART_UNIT', label: '실린더 진입·반출', start: 4.67, end: 6.77 },
   { id: 'POLY_ROBOT', label: '실린더 충전', start: 4.67, end: 7.2 },
-  { id: 'POPUP_UNIT', label: '팝업 승강', start: 5.0, end: 6.73 },
+  { id: 'POPUP_UNIT', label: '카트 위치 결정', start: 5.0, end: 6.73 },
 ];
 
 /** 현재 사이클 시각에 활성인 단계들 */
