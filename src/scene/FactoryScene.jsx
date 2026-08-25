@@ -510,18 +510,26 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
 
   /**
    * 도착 후 자동 회전(시네마틱 오빗).
-   *  라인 이동이 끝나면 새 라인을 중심으로 천천히 돌기 시작하고,
-   *  사용자가 화면을 잡는 순간('start' 이벤트) 바로 멈춰 조작을 방해하지 않는다.
+   *  회전을 켜는 그 시점에 '조작 시작(start)' 리스너를 함께 붙인다 — 회전·이동·줌
+   *  무엇이든 사용자가 잡는 순간 즉시 멈추고 리스너도 스스로 정리된다.
+   *  (마운트 시점 부착은 Canvas 내부가 비동기로 마운트돼 controls 가 아직 없어
+   *   실패한다 — 그래서 사용 시점에 붙인다)
    */
-  useEffect(() => {
-    const controls = controlsRef?.current;
-    if (!controls) return undefined;
-    const stopAutoRotate = () => {
+  const stopAutoRotateRef = useRef(null);
+  const armAutoRotate = (controls) => {
+    if (stopAutoRotateRef.current) {
+      controls.removeEventListener('start', stopAutoRotateRef.current);
+    }
+    controls.autoRotateSpeed = 1.8; // 한 바퀴 ≈ 33초
+    controls.autoRotate = true;
+    const stop = () => {
       controls.autoRotate = false;
+      controls.removeEventListener('start', stop);
+      stopAutoRotateRef.current = null;
     };
-    controls.addEventListener('start', stopAutoRotate);
-    return () => controls.removeEventListener('start', stopAutoRotate);
-  }, [controlsRef]);
+    stopAutoRotateRef.current = stop;
+    controls.addEventListener('start', stop);
+  };
 
   useEffect(() => {
     const from = prevOrigin.current;
@@ -573,9 +581,8 @@ function useLineCameraShift(controlsRef, origin, focusRequest) {
         animRef.current = requestAnimationFrame(step);
       } else {
         animRef.current = null;
-        /* 도착 — 새 라인을 중심으로 천천히 자동 회전 시작 (드래그하면 멈춘다) */
-        controls.autoRotateSpeed = 0.6;
-        controls.autoRotate = true;
+        /* 도착 — 새 라인을 중심으로 자동 회전 시작 (조작하면 즉시 멈춘다) */
+        armAutoRotate(controls);
       }
     };
     animRef.current = requestAnimationFrame(step);
@@ -841,8 +848,10 @@ export default function FactoryScene({
         }}
       >
         {/* 배경은 캔버스 뒤 DOM 의 CSS 그라데이션(theme.scene.bgGradient)이 비친다.
-            fog 색을 그라데이션 중간 톤과 맞춰 원경이 자연스럽게 녹게 한다. */}
-        <fog attach="fog" args={[theme.scene.fog, 35, 110]} />
+            fog 색을 그라데이션 중간 톤과 맞춰 원경이 자연스럽게 녹게 한다.
+            안개는 깊이감만 남기고 멀찍이 민다 — 건물(±26m)과 최대 줌아웃(60m)
+            범위에서는 거의 안 보이고, 아주 먼 원경에서만 옅게 깔린다. */}
+        <fog attach="fog" args={[theme.scene.fog, 70, 260]} />
 
         <Suspense fallback={null}>
           <SceneContents

@@ -78,7 +78,8 @@ const reviveMemos = (stored) =>
   );
 
 export default function DigitalTwinDashboard() {
-  const [appearance, setAppearance] = usePersistentState('appearance', 'dark');
+  /* 기본은 라이트. 키를 ui.appearance 로 올려 예전 자동 저장값(dark)에 안 끌려간다 */
+  const [appearance, setAppearance] = usePersistentState('ui.appearance', 'light');
   /* 로그인 세션 — { id, name, role, at }. 없으면 로그인 화면만 보인다. */
   const [session, setSession] = usePersistentState('session', null);
   const [mode, setMode] = useState('operation');
