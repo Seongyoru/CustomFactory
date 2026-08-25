@@ -28,6 +28,7 @@ import {
   PROCESS_CYCLE_SEC,
   SHELL_ASSET,
   STATUS,
+  clipTimeFor,
 } from '../data/factoryAssets.js';
 import { assetUrl } from '../lib/baseUrl.js';
 
@@ -155,7 +156,7 @@ function advanceProcessClock(clock, state, delta) {
   clock.time = (clock.time + delta * clock.timeScale) % PROCESS_CYCLE_SEC;
 }
 
-function useProcessAnimation(object, animations, clock) {
+function useProcessAnimation(object, animations, clock, assetId) {
   const mixer = useMemo(() => {
     const clip = animations?.find((a) => a.name === ANIMATION_CLIP);
     if (!clip) return null;
@@ -193,7 +194,9 @@ function useProcessAnimation(object, animations, clock) {
 
   useFrame((state, delta) => {
     advanceProcessClock(clock, state, delta);
-    if (mixer) mixer.setTime(clock.time);
+    /* 라인 사이클 시각을 설비별 클립 시각으로 매핑한다 — 컨베이어는 그대로,
+       나머지는 SEQUENCE_DELAY_SEC 만큼 늦춰 '컨베이어 정지 후 시작'을 재현 */
+    if (mixer) mixer.setTime(clipTimeFor(assetId, clock.time));
   });
 
   return Boolean(mixer);
@@ -282,7 +285,7 @@ function SelectableModel({
   faulted = false, stopped = false, registerObject,
 }) {
   const { object, size, center, animations } = useAssembledModel(asset.file);
-  useProcessAnimation(object, animations, clock);
+  useProcessAnimation(object, animations, clock, asset.id);
   useAlphaMapOverride(object, asset.alphaMaps);
   useFaultHighlight(object, faulted);
   const [hovered, setHovered] = useState(false);
@@ -386,7 +389,7 @@ function SelectableModel({
 function StaticModel({ asset, offset, clock, opacity = 1 }) {
   const ghost = opacity < 1;
   const { object, animations } = useAssembledModel(asset.file, { transparent: ghost, opacity });
-  useProcessAnimation(object, animations, clock);
+  useProcessAnimation(object, animations, clock, asset.id);
   useAlphaMapOverride(object, ghost ? null : asset.alphaMaps);
   return (
     <group position={offset}>

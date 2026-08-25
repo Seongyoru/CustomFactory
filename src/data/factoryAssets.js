@@ -302,39 +302,49 @@ export const FAULT_SCENARIOS = [
 ];
 
 /* ---------------------------------------------------------------------------
- * 공정 애니메이션
+ * 공정 애니메이션 — 실제 공정 순서로 재타이밍
  * ---------------------------------------------------------------------------
- *  애니메이션이 있는 모든 GLB 에는 길이 7.20초짜리 "TOTAL" 클립이 들어 있습니다.
- *  이게 전체 공정 1사이클의 마스터 타임라인이고, 각 설비의 동작이 그 안의
- *  올바른 시각에 이미 배치돼 있습니다. 따라서 순서를 코드로 짤 필요 없이
- *  모든 설비의 TOTAL 을 "하나의 공유 시계"로 같은 시각에 재생하기만 하면
- *  앞 공정 → 다음 공정 순서가 그대로 재현됩니다.
+ *  애니메이션이 있는 모든 GLB 에는 길이 7.20초짜리 "TOTAL" 클립이 들어 있고,
+ *  각 설비의 동작이 그 안에 구워져 있습니다. 키프레임 실측(클립 기준):
  *
- *  아래 phase 값은 TOTAL 의 키프레임에서 "값이 실제로 변하는 구간"만 추출한
- *  측정 결과입니다. 겹치는 구간은 설비 간 인수인계입니다.
+ *    CONVEYOR_UNIT        0.00 ~ 3.17s
+ *    LOAD_TRANSFER_ROBOT  1.00 ~ 2.83s   ← 문제: 컨베이어가 아직 이동 중인데 시작
+ *    CUTTING_UNIT         2.57 ~ 4.87s
+ *    CART_UNIT            4.67 ~ 6.77s
+ *    POLY_ROBOT           4.67 ~ 7.20s
+ *    POPUP_UNIT           5.00 ~ 6.73s
  *
- *    CONVEYOR_UNIT        0.00 ~ 3.17s   원자재 이송
- *    LOAD_TRANSFER_ROBOT  1.00 ~ 2.83s   이재
- *    CUTTING_UNIT         2.57 ~ 4.87s   개포장 절단
- *    CART_UNIT            4.67 ~ 6.77s   카트 진입/적재
- *    POLY_ROBOT           4.67 ~ 7.20s   실린더 충전
- *    POPUP_UNIT           5.00 ~ 6.73s   팝업 승강
+ *  실제 공정은 "컨베이어가 이재 로봇 앞에 도착해 **정지한 뒤**" 로봇이 집습니다.
+ *  그래서 GLB 를 다시 굽지 않고 재생 시각을 설비별로 매핑합니다:
+ *   - 컨베이어는 라인 사이클 시각 그대로 재생
+ *   - 나머지 전 설비는 SEQUENCE_DELAY_SEC(=3.17−1.00=2.17s) 만큼 늦춰 재생
+ *  이렇게 하면 로봇이 정확히 컨베이어 정지 시점(3.17s)에 움직이기 시작하고,
+ *  로봇→절단기→폴리/카트/팝업 사이에 구워진 인수인계 타이밍은 그대로 유지됩니다.
+ *  라인 1사이클은 클립 7.2s + 지연 2.17s = 9.37s 가 됩니다.
  *
  *  ※ FENCE_UNIT 의 "All Animations"(8.0s)는 3ds Max 카메라 타깃
  *    (PhysCamera001.Target)이 대상이라 재생 대상이 아닙니다.
  *    재생은 오직 "TOTAL" 클립만 합니다.
  * ------------------------------------------------------------------------- */
-export const PROCESS_CYCLE_SEC = 7.2;
+export const CLIP_SEC = 7.2; // GLB "TOTAL" 클립 원본 길이
+export const SEQUENCE_DELAY_SEC = 2.17; // 컨베이어 정지(3.17s) − 로봇 구움 시작(1.00s)
+export const PROCESS_CYCLE_SEC = CLIP_SEC + SEQUENCE_DELAY_SEC; // 라인 1사이클 = 9.37s
 export const ANIMATION_CLIP = 'TOTAL';
 
-/** 공정 단계 — 애니메이션 시각으로 현재 진행 단계를 표시하는 데 쓴다 */
+/** 라인 사이클 시각 → 이 설비의 클립 재생 시각 (구간 밖은 양 끝 포즈에 고정) */
+export const clipTimeFor = (assetId, cycleTime) => {
+  const offset = assetId === 'CONVEYOR_UNIT' ? 0 : SEQUENCE_DELAY_SEC;
+  return Math.min(CLIP_SEC, Math.max(0, cycleTime - offset));
+};
+
+/** 공정 단계 — '라인 사이클' 시각 기준 (지연 반영, 실제 공정 순서) */
 export const PROCESS_PHASES = [
   { id: 'CONVEYOR_UNIT', label: '원자재 이송', start: 0.0, end: 3.17 },
-  { id: 'LOAD_TRANSFER_ROBOT', label: '원자재 이재', start: 1.0, end: 2.83 },
-  { id: 'CUTTING_UNIT', label: '개포장 절단', start: 2.57, end: 4.87 },
-  { id: 'CART_UNIT', label: '실린더 진입·반출', start: 4.67, end: 6.77 },
-  { id: 'POLY_ROBOT', label: '실린더 충전', start: 4.67, end: 7.2 },
-  { id: 'POPUP_UNIT', label: '카트 위치 결정', start: 5.0, end: 6.73 },
+  { id: 'LOAD_TRANSFER_ROBOT', label: '원자재 이재', start: 3.17, end: 5.0 },
+  { id: 'CUTTING_UNIT', label: '개포장 절단', start: 4.74, end: 7.04 },
+  { id: 'CART_UNIT', label: '실린더 진입·반출', start: 6.84, end: 8.94 },
+  { id: 'POPUP_UNIT', label: '카트 위치 결정', start: 7.17, end: 8.9 },
+  { id: 'POLY_ROBOT', label: '실린더 충전', start: 6.84, end: 9.37 },
 ];
 
 /** 현재 사이클 시각에 활성인 단계들 */
