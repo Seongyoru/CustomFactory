@@ -13,7 +13,7 @@ const fmtIso = (iso) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
 
-export async function downloadReportWorkbook({ production, events, lineStats, oeeByLine }) {
+export async function downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots = [] }) {
   /* xlsx 는 내보내기를 실제로 누를 때만 내려받는다 */
   const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
@@ -65,7 +65,30 @@ export async function downloadReportWorkbook({ production, events, lineStats, oe
   wsAlarm['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 50 }];
   XLSX.utils.book_append_sheet(wb, wsAlarm, '알람 이력');
 
-  /* 4) 전체 이벤트 로그 */
+  /* 4) 시뮬레이션 스냅샷 */
+  if (simSnapshots.length > 0) {
+    const simRows = [
+      ['저장 시각', '라인', '로트', '수량(EA)', 'P50 소요(초)', 'P90 소요(초)', '완료 예정(P50)', '예상 불량', '반출 실린더', '배속', '저장자'],
+      ...simSnapshots.map((s) => [
+        fmtIso(s.at),
+        lineName(s.lineId),
+        s.lots,
+        s.totalQty,
+        Math.round(s.p50Sec),
+        Math.round(s.p90Sec),
+        fmtIso(s.finishAtP50),
+        s.defectsMean,
+        s.cylinders,
+        s.speed,
+        s.user ?? '-',
+      ]),
+    ];
+    const wsSim = XLSX.utils.aoa_to_sheet(simRows);
+    wsSim['!cols'] = simRows[0].map(() => ({ wch: 14 }));
+    XLSX.utils.book_append_sheet(wb, wsSim, '시뮬레이션 스냅샷');
+  }
+
+  /* 5) 전체 이벤트 로그 */
   const eventRows = [
     ['시각', '구분', '라인', '내용'],
     ...events.map((e) => [fmtIso(e.at), eventLabel(e.type), lineName(e.lineId), e.message]),

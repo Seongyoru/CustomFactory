@@ -66,6 +66,7 @@ import JobCancelModal from './components/modals/JobCancelModal.jsx';
 import FaultAlarmModal from './components/modals/FaultAlarmModal.jsx';
 import EStopModal from './components/modals/EStopModal.jsx';
 import ReportModal from './components/report/ReportModal.jsx';
+import SourceSettingsModal from './components/modals/SourceSettingsModal.jsx';
 import { clearAllPersisted } from './lib/persist.js';
 import { PERMISSION_HINTS, ROLES, hasPermission } from './auth/auth.js';
 import LoginScreen from './auth/LoginScreen.jsx';
@@ -120,6 +121,10 @@ export default function DigitalTwinDashboard() {
   const [excelModal, setExcelModal] = useState(false);
   const [expandedCam, setExpandedCam] = useState(null);
   const [reportModal, setReportModal] = useState(false);
+  const [sourceModal, setSourceModal] = useState(false);
+
+  /* 텔레메트리 데이터 소스 — 시뮬레이션(기본) 또는 OPC-UA WebSocket 게이트웨이 */
+  const [telemetryConfig, setTelemetryConfig] = usePersistentState('telemetryConfig', { type: 'sim' });
 
   /* 튜토리얼 — 로그인(또는 세션이 살아있는 재접속)마다 자동 실행.
      건너뛰면 그 세션 동안만 닫히고, 프로필 메뉴에서 언제든 다시 볼 수 있다. */
@@ -135,6 +140,8 @@ export default function DigitalTwinDashboard() {
   /* 생산 실적(완료된 작업)·운영 이벤트 로그 — 리포트 화면의 데이터 소스 */
   const [production, setProduction] = usePersistentState('production', []);
   const [events, setEvents] = usePersistentState('events', []);
+  /* 시뮬레이션 스냅샷 — 예측을 저장해 두고 리포트 센터에서 계획끼리 비교한다 */
+  const [simSnapshots, setSimSnapshots] = usePersistentState('simSnapshots', []);
 
   const lineNameOf = (id) => PLANTS.find((p) => p.id === id)?.name ?? id;
 
@@ -320,7 +327,29 @@ export default function DigitalTwinDashboard() {
       ),
     [eStopByLine, jobsByLine]
   );
-  const telemetry = useTelemetry({ stoppedByLine: telemetryStopped, faults });
+  /* 게이트웨이 알람 — FAULT_SCENARIOS 와 같은 형태라 기존 알람 플로우가 그대로 동작.
+     이미 알람이 떠 있으면 새 알람은 무시한다 (한 번에 하나 — 기존 UX 유지) */
+  const alarmRef = useRef(alarm);
+  alarmRef.current = alarm;
+  const handleGatewayAlarm = useCallback(
+    (a) => {
+      if (alarmRef.current) return;
+      const next = { ...a, at: new Date(), acked: false };
+      /* ref 를 즉시 선점한다 — 연속 프레임 2건이 재렌더 커밋 전에 도착해도
+         가드를 둘 다 통과해 이벤트가 이중 기록되지 않게 (해제는 렌더 동기화가 처리) */
+      alarmRef.current = next;
+      setAlarm(next);
+      logEvent('ALARM_RAISED', `[${a.code}] ${a.title}`, { lineId: a.lineId, assetId: a.assetId });
+    },
+    [logEvent]
+  );
+
+  const telemetry = useTelemetry({
+    stoppedByLine: telemetryStopped,
+    faults,
+    sourceConfig: telemetryConfig,
+    onAlarm: handleGatewayAlarm,
+  });
   const selectedAssetFault =
     alarm && alarm.lineId === plant && alarm.assetId === selectedId ? alarm : null;
 
@@ -446,6 +475,42 @@ export default function DigitalTwinDashboard() {
     logEvent('JOB_REORDERED', `${moved.name} 순서 변경 (${from + 1}번 → ${to + 1}번)`, { lineId: plant });
   };
 
+  /** 시뮬레이션 결과를 스냅샷으로 저장 — 리포트 센터의 '시뮬레이션' 탭에서 비교한다.
+   *  표·비교 카드·엑셀이 읽는 필드만 저장한다 (localStorage 30건 공유 저장소).
+   *  ※ p50Sec/p90Sec 는 배속으로 나눈 벽시계 초 — 배속이 다른 스냅샷과 비교할 땐 단위가 다르다. */
+  const handleSaveSimSnapshot = (r) => {
+    if (!can('jobs.manage')) return; // 게스트는 공유 스냅샷 저장소를 덮어쓸 수 없다
+    const snap = {
+      id: `SIM-${Date.now()}`,
+      at: new Date().toISOString(),
+      lineId: plant,
+      user: session?.name,
+      speed: r.speed,
+      lots: r.summary.lots,
+      totalQty: r.summary.totalQty,
+      cylinders: r.summary.cylinders,
+      p50Sec: r.finishWallSec.p50,
+      p90Sec: r.finishWallSec.p90,
+      finishAtP50: r.finishAtP50.toISOString(),
+      defectsMean: r.defects.mean,
+    };
+    setSimSnapshots((prev) => [snap, ...prev].slice(0, 30));
+    logEvent('SIM_SNAPSHOT', `시뮬레이션 스냅샷 저장 — ${snap.totalQty} EA · P50 ${fmtDuration(Math.round(snap.p50Sec))}`, {
+      lineId: plant,
+    });
+  };
+
+  const handleDeleteSnapshot = (id) => {
+    /* 이벤트 기록은 업데이터 밖에서 — StrictMode 이중 실행에 걸리지 않게 */
+    const snap = simSnapshots.find((s) => s.id === id);
+    setSimSnapshots((prev) => prev.filter((s) => s.id !== id));
+    if (snap) {
+      logEvent('SIM_SNAPSHOT_DELETED', `시뮬레이션 스냅샷 삭제 — ${snap.totalQty} EA (${snap.id})`, {
+        lineId: snap.lineId,
+      });
+    }
+  };
+
   /**
    * 시뮬레이션의 SPT 정렬 제안 적용 — 진행 중인 선두 로트는 반드시 그대로 두고
    * 대기 로트만 제안 순서로 재배열한다 (제안이 낡았어도 선두를 끌어내리지 않게).
@@ -563,6 +628,7 @@ export default function DigitalTwinDashboard() {
           onSelectJob={setSelectedJobId}
           onReorderJobs={handleReorderJobs}
           onApplyOrder={handleApplyOrder}
+          onSaveSnapshot={handleSaveSimSnapshot}
           todayQty={todayQty}
           onOpenJobAdd={() => setJobAddModal(true)}
           onOpenExcel={() => setExcelModal(true)}
@@ -630,11 +696,33 @@ export default function DigitalTwinDashboard() {
           ${theme.headerBg} text-[10px] tabular-nums ${theme.textFaint}`}
       >
         <div className="flex items-center gap-4">
-          {/* 데이터 소스 상태 — 시뮬레이션/실계측을 정직하게 표시한다 */}
-          <span className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            {telemetry.sourceInfo.label} 연결됨
-          </span>
+          {/* 데이터 소스 상태 — 시뮬레이션/실계측·연결 상태를 정직하게 표시.
+              누구나 클릭해 현재 소스·연결 안내를 볼 수 있고, 전환은 관리자만 가능하다
+              (연결 실패 시 비관리자에게도 원인·조치 안내가 닿아야 한다) */}
+          <button
+            type="button"
+            onClick={() => setSourceModal(true)}
+            title={can('source.configure') ? '데이터 소스 설정' : PERMISSION_HINTS['source.configure']}
+            className="flex items-center gap-1.5 hover:underline cursor-pointer"
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                telemetry.status === 'error'
+                  ? 'bg-red-500'
+                  : ['connecting', 'reconnecting'].includes(telemetry.status)
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-emerald-500'
+              }`}
+            />
+            {telemetry.sourceInfo.label}{' '}
+            {telemetry.status === 'connecting'
+              ? '연결 중…'
+              : telemetry.status === 'reconnecting'
+                ? '재연결 중…'
+                : telemetry.status === 'error'
+                  ? '연결 실패'
+                  : '연결됨'}
+          </button>
           <span>Latency {telemetry.latencyMs ?? '--'}ms</span>
           <span>Sync {fmtDate(now)} {fmtClock(now)}</span>
           {/* 비상 정지가 라인 단위라, 보고 있지 않은 라인이 멈춰 있어도 알 수 있어야 한다 */}
@@ -707,6 +795,24 @@ export default function DigitalTwinDashboard() {
         <CctvModal theme={theme} cam={expandedCam} now={now} onClose={() => setExpandedCam(null)} />
       )}
 
+      {sourceModal && (
+        <SourceSettingsModal
+          theme={theme}
+          config={telemetryConfig}
+          connectionStatus={telemetry.status}
+          readOnly={!can('source.configure')}
+          onSave={(next) => {
+            if (!can('source.configure')) return; // 읽기 전용(비관리자) 방어선
+            setTelemetryConfig(next);
+            logEvent(
+              'SOURCE_CHANGED',
+              next.type === 'opcua' ? `데이터 소스 → OPC-UA 게이트웨이 (${next.url})` : '데이터 소스 → 시뮬레이션'
+            );
+          }}
+          onClose={() => setSourceModal(false)}
+        />
+      )}
+
       {/* 튜토리얼 — 로그인마다 자동으로 뜨고, 닫으면 이번 세션 동안만 닫힌다 */}
       {tutorialOpen && (
         <TutorialOverlay theme={theme} onClose={() => setTutorialOpen(false)} />
@@ -718,6 +824,9 @@ export default function DigitalTwinDashboard() {
           production={production}
           events={events}
           lineStats={lineStats}
+          simSnapshots={simSnapshots}
+          onDeleteSnapshot={handleDeleteSnapshot}
+          canManageSnapshots={can('jobs.manage')}
           canExport={can('report.export')}
           exportHint={PERMISSION_HINTS['report.export']}
           canReset={can('data.reset')}

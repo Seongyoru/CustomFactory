@@ -13,11 +13,11 @@
  */
 import React, { useMemo, useState } from 'react';
 import {
-  AlertOctagon, BarChart3, FileDown, ListChecks, ScrollText, Siren, Trash2, X,
+  Activity, AlertOctagon, BarChart3, FileDown, ListChecks, ScrollText, Siren, Trash2, X,
 } from 'lucide-react';
 import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
 import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
-import { fmtClock, fmtDate, fmtDuration } from '../../lib/format.js';
+import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
 import { Modal } from '../ui.jsx';
 
@@ -140,10 +140,24 @@ const OeeBar = ({ theme, label, value, strong = false }) => (
 
 const ReportModal = ({
   theme, production, events, lineStats, onClose, onResetData,
+  simSnapshots = [], onDeleteSnapshot, canManageSnapshots = true,
   canExport = true, exportHint, canReset = true, resetHint,
 }) => {
   const [tab, setTab] = useState('production');
   const [confirmReset, setConfirmReset] = useState(false);
+  /* 스냅샷 비교 — 최대 2개 선택. 삭제·캡 축출로 죽은 id 는 선택에서 걸러낸다 —
+     고아 id 가 마지막 슬롯을 차지해 살아있는 선택을 밀어내지 않게 */
+  const [compareIds, setCompareIds] = useState([]);
+  const toggleCompare = (id) =>
+    setCompareIds((prev) => {
+      const live = prev.filter((x) => simSnapshots.some((s) => s.id === x));
+      return live.includes(id) ? live.filter((x) => x !== id) : [...live.slice(-1), id];
+    });
+  const compared = compareIds
+    .map((id) => simSnapshots.find((s) => s.id === id))
+    .filter(Boolean);
+  /* 스냅샷 삭제는 되돌릴 수 없다 — 첫 클릭은 무장, 두 번째 클릭이 실제 삭제 */
+  const [armedDelete, setArmedDelete] = useState(null);
 
   /* 라인별 OEE */
   const oeeByLine = useMemo(() => {
@@ -189,6 +203,7 @@ const ReportModal = ({
 
   const tabs = [
     { key: 'production', label: '생산 리포트', icon: BarChart3 },
+    { key: 'simulations', label: '시뮬레이션', icon: Activity, count: simSnapshots.length },
     { key: 'alarms', label: '알람 이력', icon: Siren, count: alarmEvents.length },
     { key: 'audit', label: '작업 로그', icon: ScrollText, count: events.length },
   ];
@@ -211,7 +226,7 @@ const ReportModal = ({
             type="button"
             disabled={!canExport}
             title={!canExport ? exportHint : undefined}
-            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine })}
+            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots })}
             className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-bold text-white ${theme.accentBg}
               hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
           >
@@ -330,6 +345,141 @@ const ReportModal = ({
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </section>
+          </>
+        )}
+
+        {tab === 'simulations' && (
+          <>
+            {/* 비교 카드 — 2개 선택 시 */}
+            {compared.length === 2 && (() => {
+              const [a, b] = compared;
+              const dSec = (x, y) => {
+                const d = y - x;
+                const sign = d > 0 ? '+' : d < 0 ? '−' : '±';
+                return `${sign}${fmtKoDuration(Math.abs(d))}`;
+              };
+              const dNum = (x, y) => {
+                const d = y - x;
+                return `${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}`;
+              };
+              /* 낮을수록 좋음 — 동일(Δ0)은 중립. 저장된 소요 시간은 배속으로 나눈
+                 벽시계 초라서, 배속이 다른 두 스냅샷의 시간 비교는 색을 칠하지 않는다 */
+              const lowerBetter = (x, y) => (y === x ? null : y < x);
+              const speedMismatch = (a.speed ?? 1) !== (b.speed ?? 1);
+              const rows = [
+                ['배속', `×${fmtSpeed(a.speed ?? 1)}`, `×${fmtSpeed(b.speed ?? 1)}`, speedMismatch ? '다름' : '동일', null],
+                ['P50 소요', fmtKoDuration(a.p50Sec), fmtKoDuration(b.p50Sec), dSec(a.p50Sec, b.p50Sec), speedMismatch ? null : lowerBetter(a.p50Sec, b.p50Sec)],
+                ['P90 소요', fmtKoDuration(a.p90Sec), fmtKoDuration(b.p90Sec), dSec(a.p90Sec, b.p90Sec), speedMismatch ? null : lowerBetter(a.p90Sec, b.p90Sec)],
+                ['총 수량', `${a.totalQty} EA`, `${b.totalQty} EA`, `${dNum(a.totalQty, b.totalQty)} EA`, null],
+                ['예상 불량', `${a.defectsMean} EA`, `${b.defectsMean} EA`, `${dNum(a.defectsMean, b.defectsMean)} EA`, lowerBetter(a.defectsMean, b.defectsMean)],
+                ['반출 실린더', `${a.cylinders}개`, `${b.cylinders}개`, `${dNum(a.cylinders, b.cylinders)}개`, null],
+              ];
+              return (
+                <section className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} p-3`}>
+                  <p className={`text-[11px] font-bold mb-2 ${theme.accentText}`}>스냅샷 비교 (A → B)</p>
+                  {speedMismatch && (
+                    <p className="text-[10px] leading-relaxed mb-2 text-amber-500">
+                      ⚠ 두 스냅샷의 배속이 달라 소요 시간의 단위가 다릅니다 — P50/P90 차이는
+                      계획이 아니라 배속 차이일 수 있으니 참고만 하세요.
+                    </p>
+                  )}
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className={`border-b ${theme.divider}`}>
+                        <th className={th}>항목</th>
+                        <th className={th}>A · {fmtClock(new Date(a.at))}</th>
+                        <th className={th}>B · {fmtClock(new Date(b.at))}</th>
+                        <th className={th}>Δ (B−A)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(([k, va, vb, delta, better]) => (
+                        <tr key={k} className={`border-b last:border-0 ${theme.divider}`}>
+                          <td className={`${td} ${theme.textMuted}`}>{k}</td>
+                          <td className={`${td} tabular-nums ${theme.textSecondary}`}>{va}</td>
+                          <td className={`${td} tabular-nums ${theme.textSecondary}`}>{vb}</td>
+                          <td className={`${td} tabular-nums font-semibold ${better === null ? theme.textSecondary : better ? 'text-emerald-500' : 'text-red-500'}`}>
+                            {delta}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              );
+            })()}
+
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+              <table className="w-full text-[11px]">
+                <thead className={theme.headerBg}>
+                  <tr className={`border-b ${theme.divider}`}>
+                    {['비교', '저장 시각', '라인', '로트', '수량', 'P50 소요', '완료 예정', '배속', '불량', '저장자', ''].map((h) => (
+                      <th key={h} className={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {simSnapshots.length === 0 && (
+                    <tr><td colSpan={11} className={`px-3 py-6 text-center ${theme.textFaint}`}>
+                      저장된 스냅샷이 없습니다. 라인 시뮬레이션 결과에서 "리포트에 스냅샷 저장"을 누르면 여기에 쌓입니다.
+                    </td></tr>
+                  )}
+                  {simSnapshots.map((s) => (
+                    <tr key={s.id} className={`border-b last:border-0 ${theme.divider}`}>
+                      <td className="px-3 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={compareIds.includes(s.id)}
+                          onChange={() => toggleCompare(s.id)}
+                          className="accent-sky-500"
+                          title="2개를 선택하면 위에 비교표가 나타납니다"
+                        />
+                      </td>
+                      <td className={`${td} tabular-nums ${theme.textFaint}`}>{fmtDate(new Date(s.at))} {fmtClock(new Date(s.at))}</td>
+                      <td className={`${td} ${theme.textSecondary}`}>{lineName(s.lineId)}</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{s.lots}건</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{s.totalQty} EA</td>
+                      <td className={`${td} tabular-nums ${theme.textPrimary}`}>{fmtKoDuration(s.p50Sec)}</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{fmtClock(new Date(s.finishAtP50), false)}</td>
+                      <td className={`${td} tabular-nums ${theme.textFaint}`}>×{fmtSpeed(s.speed ?? 1)}</td>
+                      <td className={`${td} tabular-nums ${theme.textFaint}`}>~{s.defectsMean} EA</td>
+                      <td className={`${td} ${theme.textFaint}`}>{s.user ?? '-'}</td>
+                      <td className="px-2 py-1.5">
+                        {canManageSnapshots && (
+                          armedDelete === s.id ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                /* 비교 선택에서도 지운다 — 고아 id 를 남기지 않는다 */
+                                setCompareIds((prev) => prev.filter((x) => x !== s.id));
+                                setArmedDelete(null);
+                                onDeleteSnapshot?.(s.id);
+                              }}
+                              onBlur={() => setArmedDelete(null)}
+                              className="text-[10px] font-bold text-red-500 whitespace-nowrap"
+                              aria-label="삭제 확정"
+                              title="한 번 더 누르면 영구 삭제됩니다"
+                            >
+                              삭제 확정
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setArmedDelete(s.id)}
+                              className={`${theme.textGhost} hover:text-red-500 transition`}
+                              aria-label="스냅샷 삭제"
+                              title="스냅샷 삭제 (한 번 더 눌러 확정)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </section>

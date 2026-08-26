@@ -38,6 +38,7 @@ const ROLE_PERMISSIONS = {
     'report.export',
     'layout.adjust',
     'data.reset',
+    'source.configure',
   ],
 };
 
@@ -53,6 +54,7 @@ export const PERMISSION_HINTS = {
   'fault.test': '오류 테스트는 라인 운영자 이상만 가능합니다.',
   'report.export': '리포트 내보내기는 라인 운영자 이상만 가능합니다.',
   'data.reset': '데이터 초기화는 시스템 관리자만 가능합니다.',
+  'source.configure': '데이터 소스 설정은 시스템 관리자만 가능합니다.',
 };
 
 /**

@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Settings2, Trash2, Upload, X,
+  Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Save, Settings2, Trash2, Upload, X,
 } from 'lucide-react';
 import { completedEaAt, findAsset } from '../../data/factoryAssets.js';
 import { SIM_ASSUMPTIONS, probabilityBefore, simulateLine } from '../../lib/lineSimulation.js';
@@ -43,11 +43,13 @@ const CylinderGauge = ({ theme, cylinder }) => (
 
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
-  selectedJobId, onSelectJob, onReorderJobs, onApplyOrder,
+  selectedJobId, onSelectJob, onReorderJobs, onApplyOrder, onSaveSnapshot,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
   todayQty = 0, cylinder,
   canManageJobs = true, manageHint,
 }) => {
+  /* 저장된 결과 표시 — 같은 결과를 두 번 저장하지 않게 앵커로 구분 */
+  const [savedAnchor, setSavedAnchor] = useState(null);
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
   const selectedJob = jobs.find((j) => j.id === selectedJobId) ?? null;
   const targetQty = jobs.reduce((sum, j) => sum + j.qty, 0);
@@ -620,6 +622,22 @@ const LeftDashboardPanel = ({
                     ✓ 소모품 전 항목 잔여 계획 완주 가능
                   </p>
                 )}
+
+                {/* 스냅샷 저장 — 리포트 센터 '시뮬레이션' 탭에서 계획끼리 비교한다.
+                    공유 저장소(30건 캡)를 덮어쓰는 조작이라 정렬 적용과 같은 권한으로 잠근다 */}
+                <GhostButton
+                  icon={Save}
+                  theme={theme}
+                  className="w-full"
+                  disabled={!canManageJobs || savedAnchor === r.anchorMs}
+                  title={!canManageJobs ? manageHint : undefined}
+                  onClick={() => {
+                    onSaveSnapshot?.(r);
+                    setSavedAnchor(r.anchorMs);
+                  }}
+                >
+                  {savedAnchor === r.anchorMs ? '리포트에 저장됨 ✓' : '리포트에 스냅샷 저장'}
+                </GhostButton>
 
                 <p className={`text-[9px] tabular-nums ${theme.textGhost}`}>
                   몬테카를로 {r.runs.toLocaleString()}회 · {r.tookMs}ms · 사이클 편차 ±3% ·

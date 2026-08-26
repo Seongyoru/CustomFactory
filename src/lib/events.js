@@ -24,6 +24,9 @@ export const EVENT_TYPES = {
   LOGIN: { label: '로그인', tone: 'sky' },
   LOGOUT: { label: '로그아웃', tone: 'slate' },
   DATA_RESET: { label: '데이터 초기화', tone: 'amber' },
+  SIM_SNAPSHOT: { label: '시뮬레이션 저장', tone: 'sky' },
+  SIM_SNAPSHOT_DELETED: { label: '시뮬레이션 스냅샷 삭제', tone: 'amber' },
+  SOURCE_CHANGED: { label: '데이터 소스 변경', tone: 'sky' },
 };
 
 export const eventLabel = (type) => EVENT_TYPES[type]?.label ?? type;
