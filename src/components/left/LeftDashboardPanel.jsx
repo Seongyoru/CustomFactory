@@ -8,7 +8,7 @@ import {
   Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Settings2, Trash2, Upload, X,
 } from 'lucide-react';
 import { completedEaAt, findAsset } from '../../data/factoryAssets.js';
-import { SIM_ASSUMPTIONS, simulateLine } from '../../lib/lineSimulation.js';
+import { SIM_ASSUMPTIONS, probabilityBefore, simulateLine } from '../../lib/lineSimulation.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
@@ -43,7 +43,7 @@ const CylinderGauge = ({ theme, cylinder }) => (
 
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
-  selectedJobId, onSelectJob, onReorderJobs,
+  selectedJobId, onSelectJob, onReorderJobs, onApplyOrder,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
   todayQty = 0, cylinder,
   canManageJobs = true, manageHint,
@@ -74,48 +74,93 @@ const LeftDashboardPanel = ({
    *  진행바는 연출이 아니라 '실제 반복 횟수'다 (결과에 계산 시간도 표기).
    */
   const [lineSim, setLineSim] = useState(null); // null | {progress:{done,total}} | {done, result}
+  const [dueTarget, setDueTarget] = useState(''); // 목표 납기 'HH:MM'
   const simCancelRef = useRef(null);
   const startLineSim = () => {
-    if (simCancelRef.current) simCancelRef.current.cancelled = true;
-    const control = { cancelled: false };
+    if (simCancelRef.current) {
+      simCancelRef.current.cancelled = true;
+      clearInterval(simCancelRef.current.timer);
+    }
+    const control = { cancelled: false, timer: null, realDone: 0, result: null };
     simCancelRef.current = control;
     const RUNS = 2000;
+    /* 계산은 실제 몬테카를로 그대로 돌리되, 진행 바는 최소 이 시간에 걸쳐 차오르게
+       페이싱한다 — '일이 되고 있다'는 감각용. 캡션의 실제 계산 ms 는 그대로 정직하다. */
+    const MIN_DISPLAY_MS = 1400;
+    const t0 = Date.now();
     setLineSim({ progress: { done: 0, total: RUNS } });
+
     simulateLine({
       lots: jobs,
       headElapsedSec: elapsed,
       carryFill: cylinder?.fill ?? 0, // 실린더 이월 채움 — 반출 수가 게이지와 일치하게
       speed: simSpeed,
       runs: RUNS,
-      onProgress: (done, total) => {
-        if (!control.cancelled) setLineSim({ progress: { done, total } });
+      onProgress: (done) => {
+        control.realDone = done;
       },
       isCancelled: () => control.cancelled,
     }).then((result) => {
-      if (control.cancelled || !result) return;
-      /* 모든 '시각'은 결과 확정 시점의 벽시계에 고정한다 — 라이브 값과 섞으면
-         배속 변경·로트 전환 때 표시가 표류하거나 점프한다 */
-      const now = Date.now();
-      setLineSim({
-        done: true,
-        result: {
-          ...result,
-          finishAtP50: new Date(now + result.finishWallSec.p50 * 1000),
-          finishAtP90: new Date(now + result.finishWallSec.p90 * 1000),
-          consumables: result.consumables.map((c) =>
-            c.ok ? c : { ...c, replaceAt: new Date(now + (c.runOutSec / result.speed) * 1000) }
-          ),
-        },
-      });
+      if (!control.cancelled && result) control.result = result;
     });
+
+    control.timer = setInterval(() => {
+      if (control.cancelled) {
+        clearInterval(control.timer);
+        return;
+      }
+      const paced = Math.floor(RUNS * Math.min(1, (Date.now() - t0) / MIN_DISPLAY_MS));
+      const shown = Math.min(control.realDone, paced);
+      if (control.result && shown >= RUNS) {
+        clearInterval(control.timer);
+        /* 모든 '시각'은 결과 확정 시점의 벽시계에 고정한다 — 라이브 값과 섞으면
+           배속 변경·로트 전환 때 표시가 표류하거나 점프한다 */
+        const now = Date.now();
+        const result = control.result;
+        setLineSim({
+          done: true,
+          result: {
+            ...result,
+            anchorMs: now,
+            finishAtP50: new Date(now + result.finishWallSec.p50 * 1000),
+            finishAtP90: new Date(now + result.finishWallSec.p90 * 1000),
+            consumables: result.consumables.map((c) =>
+              c.ok ? c : { ...c, replaceAt: new Date(now + (c.runOutSec / result.speed) * 1000) }
+            ),
+          },
+        });
+        /* 기본 납기 목표 = 90% 신뢰 상한을 '분 올림'한 시각 —
+           절사하면 P90 보다 이른 목표가 되어 표시 확률이 90% 아래로 어긋난다 */
+        setDueTarget(fmtClock(new Date(Math.ceil((now + result.finishWallSec.p90 * 1000) / 60000) * 60000), false));
+      } else {
+        setLineSim({ progress: { done: shown, total: RUNS } });
+      }
+    }, 60);
   };
   const stopLineSim = () => {
-    if (simCancelRef.current) simCancelRef.current.cancelled = true;
+    if (simCancelRef.current) {
+      simCancelRef.current.cancelled = true;
+      clearInterval(simCancelRef.current.timer);
+    }
     setLineSim(null);
   };
   useEffect(() => () => {
-    if (simCancelRef.current) simCancelRef.current.cancelled = true;
+    if (simCancelRef.current) {
+      simCancelRef.current.cancelled = true;
+      clearInterval(simCancelRef.current.timer);
+    }
   }, []);
+
+  /** 목표 납기(HH:MM)를 앵커 기준 초로 바꿔 달성 확률을 계산한다 */
+  const dueProbabilityOf = (r) => {
+    if (!dueTarget) return null;
+    const [h, m] = dueTarget.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    const target = new Date(r.anchorMs);
+    target.setHours(h, m, 0, 0);
+    if (target.getTime() <= r.anchorMs) target.setDate(target.getDate() + 1); // 지난 시각은 다음날로
+    return probabilityBefore(r.totalsWallSorted, (target.getTime() - r.anchorMs) / 1000);
+  };
 
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
@@ -449,6 +494,66 @@ const LeftDashboardPanel = ({
                   </div>
                 </div>
 
+                {/* ① 로트별 간트 타임라인 — P50 시작~종료 띠 + P90 리스크 수염 */}
+                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+                  <p className={`text-[10px] font-bold mb-1.5 ${theme.textMuted}`}>로트별 타임라인 (P50)</p>
+                  <div className="space-y-1">
+                    {r.timeline.map((row) => {
+                      const span = Math.max(1e-9, r.timeline[r.timeline.length - 1].endP90WallSec);
+                      const left = (row.startWallSec / span) * 100;
+                      const width = Math.max(1.5, ((row.endWallSec - row.startWallSec) / span) * 100);
+                      const whisker = ((row.endP90WallSec - row.endWallSec) / span) * 100;
+                      return (
+                        <div
+                          key={row.id}
+                          className="flex items-center gap-1.5"
+                          title={`${row.name} · ${row.qty} EA · ${fmtClock(new Date(r.anchorMs + row.endWallSec * 1000), false)} 완료 예정 (90%: ${fmtClock(new Date(r.anchorMs + row.endP90WallSec * 1000), false)})`}
+                        >
+                          <span className={`w-8 shrink-0 text-[9px] tabular-nums truncate ${theme.textFaint}`}>
+                            {String(row.id).split('-').pop()}
+                          </span>
+                          <span className={`relative flex-1 h-2 rounded-sm overflow-hidden ${theme.trackBg}`}>
+                            <span
+                              className="absolute inset-y-0 rounded-sm"
+                              style={{ left: `${left}%`, width: `${width}%`, backgroundColor: theme.accentHex, opacity: 0.85 }}
+                            />
+                            {/* P90 리스크 수염 — 늦어질 수 있는 범위 */}
+                            <span
+                              className="absolute inset-y-0"
+                              style={{ left: `${left + width}%`, width: `${whisker}%`, backgroundColor: theme.accentHex, opacity: 0.25 }}
+                            />
+                          </span>
+                          <span className={`w-9 shrink-0 text-right text-[9px] tabular-nums ${theme.textSecondary}`}>
+                            {fmtClock(new Date(r.anchorMs + row.endWallSec * 1000), false)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ② 목표 납기 → 달성 확률 */}
+                {(() => {
+                  const prob = dueProbabilityOf(r);
+                  const pct = prob === null ? null : Math.round(prob * 100);
+                  const tone = pct === null ? theme.textGhost : pct >= 90 ? 'text-emerald-500' : pct >= 50 ? 'text-amber-500' : 'text-red-500';
+                  return (
+                    <div className={`flex items-center gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+                      <span className={`text-[10px] shrink-0 ${theme.textMuted}`}>목표 납기</span>
+                      <input
+                        type="time"
+                        value={dueTarget}
+                        onChange={(e) => setDueTarget(e.target.value)}
+                        className={`h-6 px-1.5 rounded border text-[11px] tabular-nums ${theme.panelBorder} ${theme.inputBg} ${theme.textPrimary}
+                          focus:outline-none focus:ring-2 ${theme.accentRing}`}
+                      />
+                      <span className={`ml-auto text-[12px] font-bold tabular-nums ${tone}`}>
+                        {pct === null ? '—' : `달성 확률 ${pct}%`}
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 {/* 산출 요약 */}
                 <div className={`grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
                   {[
@@ -462,6 +567,35 @@ const LeftDashboardPanel = ({
                     </div>
                   ))}
                 </div>
+
+                {/* ③ 로트 순서 최적화 제안 — SPT (진행 중인 선두는 고정) */}
+                {r.orderSuggestion.improvable ? (
+                  <div className={`flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2`}>
+                    <p className="flex-1 text-[10px] leading-relaxed tabular-nums text-amber-600">
+                      짧은 로트 우선 정렬 시 로트당 평균{' '}
+                      <b>{fmtKoDuration(r.orderSuggestion.savedAvgSec / r.speed)}</b> 먼저 완료됩니다
+                    </p>
+                    <button
+                      type="button"
+                      disabled={!canManageJobs}
+                      title={!canManageJobs ? manageHint : '대기 로트를 짧은 순으로 재정렬합니다 (진행 중인 로트는 그대로)'}
+                      onClick={() => {
+                        onApplyOrder?.(r.orderSuggestion.order);
+                        stopLineSim(); // 순서가 바뀌면 결과가 낡으므로 지운다
+                      }}
+                      className={`shrink-0 h-7 px-2.5 rounded-md text-[10px] font-bold text-white ${theme.accentBg}
+                        hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
+                    >
+                      정렬 적용
+                    </button>
+                  </div>
+                ) : (
+                  jobs.length > 2 && (
+                    <p className="text-[10px] leading-relaxed text-emerald-500">
+                      ✓ 현재 생산 순서가 이미 최적입니다 (짧은 로트 우선)
+                    </p>
+                  )
+                )}
 
                 {/* 병목 개선 민감도 — what-if */}
                 <p className={`text-[10px] leading-relaxed tabular-nums ${theme.textMuted}`}>

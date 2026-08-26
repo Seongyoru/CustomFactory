@@ -446,6 +446,24 @@ export default function DigitalTwinDashboard() {
     logEvent('JOB_REORDERED', `${moved.name} 순서 변경 (${from + 1}번 → ${to + 1}번)`, { lineId: plant });
   };
 
+  /**
+   * 시뮬레이션의 SPT 정렬 제안 적용 — 진행 중인 선두 로트는 반드시 그대로 두고
+   * 대기 로트만 제안 순서로 재배열한다 (제안이 낡았어도 선두를 끌어내리지 않게).
+   */
+  const handleApplyOrder = (orderedIds) => {
+    updateLineJobs((prev) => {
+      if (prev.length < 3) return prev;
+      const head = prev[0];
+      const byId = new Map(prev.slice(1).map((j) => [j.id, j]));
+      const tail = orderedIds.filter((id) => byId.has(id)).map((id) => byId.get(id));
+      prev.slice(1).forEach((j) => {
+        if (!tail.includes(j)) tail.push(j); // 제안에 없는 로트는 뒤에 보존
+      });
+      return [head, ...tail];
+    });
+    logEvent('JOB_REORDERED', 'SPT 최적화 정렬 적용 (짧은 로트 우선)', { lineId: plant });
+  };
+
   /** 설비 바로가기 — 선택하고 카메라를 그 설비로 보낸다 */
   const handleFocusAsset = (assetId) => {
     setSelectedJobId(null);
@@ -544,6 +562,7 @@ export default function DigitalTwinDashboard() {
           selectedJobId={selectedJobId}
           onSelectJob={setSelectedJobId}
           onReorderJobs={handleReorderJobs}
+          onApplyOrder={handleApplyOrder}
           todayQty={todayQty}
           onOpenJobAdd={() => setJobAddModal(true)}
           onOpenExcel={() => setExcelModal(true)}

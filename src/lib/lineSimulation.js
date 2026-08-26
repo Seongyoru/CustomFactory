@@ -196,6 +196,53 @@ const quantile = (sorted, q) => {
 };
 
 /**
+ * 목표 시각(지금부터 targetWallSec 초) 안에 끝날 확률 — 정렬된 분포에서 이분 탐색.
+ *  분포 밖이면 0 또는 1 로 수렴한다.
+ */
+export const probabilityBefore = (sortedWallSec, targetWallSec) => {
+  const n = sortedWallSec.length;
+  if (n === 0) return 0;
+  let lo = 0;
+  let hi = n; // [lo, hi) — target 이하인 원소 수를 찾는다
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedWallSec[mid] <= targetWallSec) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo / n;
+};
+
+/**
+ * 로트 순서 최적화 제안 — SPT(짧은 로트 우선).
+ *  단일 라인 직렬 생산이라 총 소요(makespan)는 순서와 무관하지만,
+ *  '각 로트가 언제 끝나는가'(평균 완료 시각)는 짧은 로트를 앞세울수록 줄어든다.
+ *  진행 중인 선두 로트는 그대로 두고 대기 로트만 정렬 대상으로 삼는다.
+ */
+export const orderSuggestion = (lots) => {
+  const tail = lots.slice(1);
+  if (tail.length < 2) {
+    return { improvable: false, savedAvgSec: 0, order: lots.map((l) => l.id) };
+  }
+  const avgCompletion = (list) => {
+    let cum = 0;
+    let sum = 0;
+    list.forEach((l) => {
+      cum += l.totalSec;
+      sum += cum;
+    });
+    return sum / list.length;
+  };
+  const sorted = [...tail].sort((a, b) => a.totalSec - b.totalSec);
+  const savedAvgSec = avgCompletion(tail) - avgCompletion(sorted);
+  const alreadyOptimal = tail.every((l, i) => l.id === sorted[i].id);
+  return {
+    improvable: !alreadyOptimal && savedAvgSec > 1,
+    savedAvgSec,
+    order: [lots[0]?.id, ...sorted.map((l) => l.id)].filter(Boolean),
+  };
+};
+
+/**
  * 대기열 전체를 runs 회 시뮬레이션한다.
  *  - headElapsedSec: 선두 로트의 이미 진행된 시간 — 남은 부분만 샘플링 비율로 차감
  *  - speed: 현재 배속 — 결과의 벽시계 환산에만 쓴다
@@ -217,6 +264,7 @@ export function simulateLine({
   const A = SIM_ASSUMPTIONS;
   const totals = [];
   const defectsPerRun = [];
+  const perLotFinishes = lots.map(() => []); // 간트용 — 로트별 누적 완료 시각 분포
   const head = lots[0] ?? null;
   const headDoneEa = head ? completedEaAt(headElapsedSec, head.qty, head.taktSec) : 0;
   const headRemainEa = head ? Math.max(0, head.qty - headDoneEa) : 0;
@@ -249,6 +297,7 @@ export function simulateLine({
             lotSec = sampleLotSec(lot, rng);
           }
           sec += lotSec;
+          perLotFinishes[i].push(sec); // 이 로트가 끝나는 누적 시각
           defects += Math.round(lot.qty * rng() * A.defectRateMax);
         });
         totals.push(sec);
@@ -262,6 +311,24 @@ export function simulateLine({
 
       totals.sort((a, b) => a - b);
       const wall = (s) => s / Math.max(0.01, speed);
+
+      /* 로트별 간트 띠 — P50 시작~종료 + P90 종료(리스크 수염) */
+      let prevEnd = 0;
+      const timeline = lots.map((lot, i) => {
+        const sorted = perLotFinishes[i].sort((a, b) => a - b);
+        const end = wall(quantile(sorted, 0.5));
+        const endP90 = wall(quantile(sorted, 0.9));
+        const row = {
+          id: lot.id ?? `#${i + 1}`,
+          name: lot.name ?? '',
+          qty: lot.qty,
+          startWallSec: prevEnd,
+          endWallSec: end,
+          endP90WallSec: endP90,
+        };
+        prevEnd = end;
+        return row;
+      });
       /* 히스토그램 — 18개 구간 */
       const BINS = 18;
       const min = totals[0];
@@ -289,6 +356,9 @@ export function simulateLine({
         },
         sensitivity: bottleneckSensitivity(lots, 0.1, headElapsedSec),
         consumables: consumableOutlook(lots, headElapsedSec),
+        timeline,
+        totalsWallSorted: totals.map(wall), // 납기 달성 확률 계산용 (정렬 유지)
+        orderSuggestion: orderSuggestion(lots),
         speed,
       });
     };

@@ -9,7 +9,9 @@ import {
   STAGE_FRAMES,
   bottleneckSensitivity,
   consumableOutlook,
+  orderSuggestion,
   planSummary,
+  probabilityBefore,
   sampleLotSec,
   simulateLine,
   timeOfEa,
@@ -114,6 +116,55 @@ describe('결정식 유틸', () => {
     expect(planSummary([LOT(10)]).cylinders).toBe(2); // 10/4
     expect(planSummary([LOT(10)], { carryFill: 2 }).cylinders).toBe(3); // (2+10)/4
     expect(planSummary([LOT(10)], { carryFill: 2, headDoneEa: 4 }).cylinders).toBe(2); // (2+6)/4
+  });
+
+  it('납기 달성 확률 — 정렬 분포의 이분 탐색', () => {
+    const dist = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    expect(probabilityBefore(dist, 5)).toBe(0);
+    expect(probabilityBefore(dist, 55)).toBe(0.5);
+    expect(probabilityBefore(dist, 100)).toBe(1);
+    expect(probabilityBefore(dist, 1000)).toBe(1);
+    expect(probabilityBefore([], 10)).toBe(0);
+  });
+
+  it('순서 최적화(SPT) — 선두는 고정, 대기 로트를 짧은 순으로', () => {
+    const lots = [
+      { id: 'A', qty: 1, taktSec: 7.6, totalSec: 500 }, // 진행 중 — 고정
+      { id: 'B', qty: 1, taktSec: 7.6, totalSec: 300 },
+      { id: 'C', qty: 1, taktSec: 7.6, totalSec: 100 },
+      { id: 'D', qty: 1, taktSec: 7.6, totalSec: 200 },
+    ];
+    const s = orderSuggestion(lots);
+    expect(s.improvable).toBe(true);
+    expect(s.order).toEqual(['A', 'C', 'D', 'B']);
+    /* 현재 평균 완료 (300, 400, 600 → 433.3) vs SPT (100, 300, 600 → 333.3) */
+    expect(s.savedAvgSec).toBeCloseTo(100, 5);
+  });
+
+  it('순서 최적화 — 이미 최적이거나 대기 로트가 1개면 제안하지 않는다', () => {
+    expect(
+      orderSuggestion([
+        { id: 'A', totalSec: 500 },
+        { id: 'B', totalSec: 100 },
+        { id: 'C', totalSec: 200 },
+      ]).improvable
+    ).toBe(false);
+    expect(orderSuggestion([{ id: 'A', totalSec: 500 }, { id: 'B', totalSec: 100 }]).improvable).toBe(false);
+  });
+
+  it('간트 타임라인 — 로트 띠가 이어지고 P90 은 P50 이상이다', async () => {
+    const r = await simulateLine({ lots: [LOT(10), LOT(5), LOT(8)], runs: 300, rng: seeded(11) });
+    expect(r.timeline.length).toBe(3);
+    r.timeline.forEach((row, i) => {
+      expect(row.endWallSec).toBeGreaterThan(row.startWallSec);
+      expect(row.endP90WallSec).toBeGreaterThanOrEqual(row.endWallSec);
+      if (i > 0) expect(row.startWallSec).toBeCloseTo(r.timeline[i - 1].endWallSec, 9);
+    });
+    /* 마지막 로트의 P50 종료 = 전체 P50 부근 */
+    expect(r.timeline[2].endWallSec).toBeCloseTo(r.finishWallSec.p50, 0);
+    /* 납기 분포는 정렬돼 있고 총 런 수와 같다 */
+    expect(r.totalsWallSorted.length).toBe(300);
+    expect(probabilityBefore(r.totalsWallSorted, r.finishWallSec.p90)).toBeGreaterThan(0.85);
   });
 });
 
