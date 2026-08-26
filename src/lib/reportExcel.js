@@ -22,7 +22,7 @@ export async function downloadReportWorkbook({
 
   /* 1) 생산 실적 */
   const prodRows = [
-    ['완료 시각', '라인', '로트 번호', '품목', '수량(EA)', '불량(EA)', '계획(초)', '실적(초)', '달성률(%)'],
+    ['완료 시각', '라인', '로트 번호', '품목', '수량(EA)', '불량(EA)', '불량 유형', '계획(초)', '실적(초)', '달성률(%)'],
     ...production.map((p) => [
       fmtIso(p.finishedAt),
       lineName(p.lineId),
@@ -30,13 +30,16 @@ export async function downloadReportWorkbook({
       p.name,
       p.qty,
       p.defects,
+      p.defectTypes
+        ? Object.entries(p.defectTypes).map(([t, n]) => `${t} ${n}`).join(' · ')
+        : '',
       p.plannedSec,
       p.actualSec,
       p.actualSec > 0 ? Math.round((p.plannedSec / p.actualSec) * 100) : '',
     ]),
   ];
   const wsProd = XLSX.utils.aoa_to_sheet(prodRows);
-  wsProd['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 26 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
+  wsProd['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 26 }, { wch: 9 }, { wch: 9 }, { wch: 26 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(wb, wsProd, '생산 실적');
 
   /* 2) 라인 요약 (OEE) */

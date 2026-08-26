@@ -21,6 +21,7 @@ import {
   CONSUMABLE_WARN_PCT, consumablePercentOf, daysUntil, maintenanceKpis, remainingEaOf,
 } from '../../lib/maintenance.js';
 import PrintReport from './PrintReport.jsx';
+import { defectPareto } from '../../lib/quality.js';
 import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
@@ -121,6 +122,74 @@ const HourlyChart = ({ theme, production }) => {
           </g>
         );
       })}
+    </svg>
+  );
+};
+
+/**
+ * 품질 파레토 — 불량 유형 빈도 막대(내림차순) + 누적 점유율 꺾은선.
+ *  "어떤 불량부터 잡아야 하는가"에 답하는 차트다.
+ */
+const ParetoChart = ({ theme, pareto }) => {
+  const { rows } = pareto;
+  const W = 480;
+  const H = 150;
+  const plotH = 104;
+  const gap = 18;
+  const barW = (W - gap * (rows.length + 1)) / rows.length;
+  const maxCount = Math.max(1, ...rows.map((r) => r.count));
+  const xOf = (i) => gap + i * (barW + gap);
+  const yOfCum = (cum) => plotH - cum * plotH;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="불량 유형 파레토">
+      {[0.5, 1].map((f) => (
+        <line key={f} x1="0" x2={W} y1={plotH - plotH * f} y2={plotH - plotH * f}
+          stroke="currentColor" strokeWidth="0.5" opacity="0.12" />
+      ))}
+      <line x1="0" x2={W} y1={plotH} y2={plotH} stroke="currentColor" strokeWidth="0.7" opacity="0.25" />
+
+      {/* 빈도 막대 */}
+      {rows.map((r, i) => {
+        const h = (r.count / maxCount) * (plotH - 18);
+        return (
+          <g key={r.type}>
+            <rect x={xOf(i)} y={plotH - h} width={barW} height={h} rx="3"
+              fill={theme.accentHex} opacity={r.type === '유형 미기록' ? 0.3 : 0.8}>
+              <title>{`${r.type} · ${r.count}건 (${Math.round(r.share * 100)}%)`}</title>
+            </rect>
+            <text x={xOf(i) + barW / 2} y={plotH - h - 4} textAnchor="middle" fontSize="10"
+              fontWeight="700" fill="currentColor" opacity="0.85">
+              {r.count}
+            </text>
+            <text x={xOf(i) + barW / 2} y={H - 22} textAnchor="middle" fontSize="9"
+              fill="currentColor" opacity="0.6">
+              {r.type}
+            </text>
+            <text x={xOf(i) + barW / 2} y={H - 10} textAnchor="middle" fontSize="8"
+              fill="currentColor" opacity="0.4">
+              {Math.round(r.share * 100)}%
+            </text>
+          </g>
+        );
+      })}
+
+      {/* 누적 점유율 꺾은선 — 80% 기준선과 함께 */}
+      <line x1="0" x2={W} y1={yOfCum(0.8)} y2={yOfCum(0.8)}
+        stroke="#ef4444" strokeWidth="0.6" strokeDasharray="4 3" opacity="0.5" />
+      <polyline
+        points={rows.map((r, i) => `${xOf(i) + barW / 2},${yOfCum(r.cum)}`).join(' ')}
+        fill="none" stroke="#f59e0b" strokeWidth="1.6" opacity="0.9"
+      />
+      {rows.map((r, i) => (
+        <g key={`c-${r.type}`}>
+          <circle cx={xOf(i) + barW / 2} cy={yOfCum(r.cum)} r="2.4" fill="#f59e0b" />
+          <text x={xOf(i) + barW / 2 + 6} y={yOfCum(r.cum) - 4} fontSize="8.5"
+            fontWeight="700" fill="#f59e0b">
+            {Math.round(r.cum * 100)}%
+          </text>
+        </g>
+      ))}
     </svg>
   );
 };
@@ -235,6 +304,9 @@ const ReportModal = ({
 
   /* 보전 지표 — 알람 발생·확인·해제 이벤트에서 산출 (이벤트 로그 보관분 기준) */
   const maintKpis = useMemo(() => maintenanceKpis(events), [events]);
+
+  /* 품질 파레토 — 누적 실적의 불량 유형 분포 */
+  const pareto = useMemo(() => defectPareto(production), [production]);
 
   const tabs = [
     { key: 'production', label: '생산 리포트', icon: BarChart3 },
@@ -356,6 +428,22 @@ const ReportModal = ({
               <p className={`text-[11px] font-bold mb-2 ${theme.textMuted}`}>시간대별 생산량 (최근 12시간)</p>
               <HourlyChart theme={theme} production={production} />
             </section>
+
+            {/* 품질 파레토 — 불량이 있어야 의미가 있다 */}
+            {pareto.total > 0 && (
+              <section className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} p-3 ${theme.textSecondary}`}>
+                <div className="flex items-baseline justify-between mb-2">
+                  <p className={`text-[11px] font-bold ${theme.textMuted}`}>
+                    품질 파레토 — 불량 유형 (누적 실적 {pareto.total} EA)
+                  </p>
+                  <p className={`text-[9px] ${theme.textFaint}`}>
+                    막대 = 유형별 수량 · <span className="text-amber-500 font-semibold">주황</span> = 누적 점유율 ·
+                    <span className="text-red-500"> 점선</span> = 80% 기준
+                  </p>
+                </div>
+                <ParetoChart theme={theme} pareto={pareto} />
+              </section>
+            )}
 
             {/* 완료 작업 테이블 */}
             <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>

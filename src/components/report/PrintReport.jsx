@@ -13,6 +13,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { PRODUCTION_LINES, findAsset } from '../../data/factoryAssets.js';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
+import { defectPareto } from '../../lib/quality.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration } from '../../lib/format.js';
 import { eventLabel } from '../../lib/events.js';
 
@@ -35,6 +36,7 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
   const today = fmtDate(now);
   const todayProd = production.filter((p) => fmtDate(new Date(p.finishedAt)) === today);
   const todayAlarms = alarmEvents.filter((e) => fmtDate(new Date(e.at)) === today);
+  const pareto = defectPareto(production);
 
   return createPortal(
     <div className="print-sheet" style={{ color: '#000', background: '#fff', fontFamily: 'inherit' }}>
@@ -120,6 +122,28 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
           ))}
         </tbody>
       </table>
+
+      {/* 품질 파레토 */}
+      {pareto.total > 0 && (
+        <>
+          <h2 style={S.h2}>품질 파레토 — 불량 유형 (누적 실적 {pareto.total} EA)</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>{['불량 유형', '수량', '점유율', '누적 점유율'].map((h) => <Th key={h}>{h}</Th>)}</tr>
+            </thead>
+            <tbody>
+              {pareto.rows.map((r) => (
+                <tr key={r.type}>
+                  <Td>{r.type}</Td>
+                  <Td>{r.count} EA</Td>
+                  <Td>{Math.round(r.share * 100)}%</Td>
+                  <Td style={r.cum <= 0.8 ? { fontWeight: 700 } : undefined}>{Math.round(r.cum * 100)}%</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
 
       {/* 설비 보전 현황 */}
       <h2 style={S.h2}>설비 보전 현황</h2>

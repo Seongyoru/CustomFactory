@@ -57,6 +57,7 @@ import { useProductionEngine } from './hooks/useProductionEngine.js';
 import { useTelemetry } from './hooks/useTelemetry.js';
 import { useMaintenance } from './hooks/useMaintenance.js';
 import { consumableAlarmOf, withLiveConsumable, withMaintHistory } from './lib/maintenance.js';
+import { splitDefects } from './lib/quality.js';
 
 import TopGnb from './components/gnb/TopGnb.jsx';
 import LeftDashboardPanel from './components/left/LeftDashboardPanel.jsx';
@@ -255,6 +256,7 @@ export default function DigitalTwinDashboard() {
         name: job.name,
         qty: job.qty,
         defects,
+        defectTypes: splitDefects(defects), // 품질 파레토의 근거 — 유형별 배분
         plannedSec: job.totalSec,
         actualSec,
         finishedAt: new Date().toISOString(),
