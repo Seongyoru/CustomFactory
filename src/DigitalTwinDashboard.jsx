@@ -61,6 +61,7 @@ import { consumableAlarmOf, withLiveConsumable, withMaintHistory } from './lib/m
 import TopGnb from './components/gnb/TopGnb.jsx';
 import LeftDashboardPanel from './components/left/LeftDashboardPanel.jsx';
 import TwinViewport from './components/view/TwinViewport.jsx';
+import PlantOverview from './components/view/PlantOverview.jsx';
 import AssetDetailSidebar from './components/right/AssetDetailSidebar.jsx';
 import JobAddModal from './components/modals/JobAddModal.jsx';
 import ExcelUploadModal from './components/modals/ExcelUploadModal.jsx';
@@ -111,6 +112,25 @@ const reviveJobsByLine = (stored) =>
     Object.entries(stored ?? {}).map(([lineId, queue]) => [lineId, normalizeQueue(queue ?? [])])
   );
 
+/**
+ * 알람 큐의 발생 시각(ISO)을 Date 로 되살리고, "설비(라인×설비)당 활성 1건"
+ * 불변식을 강제한다 — 구버전 저장분에 같은 설비 건이 여럿이면 최신만 남긴다.
+ */
+const reviveAlarms = (stored) => {
+  const byAsset = new Map();
+  (Array.isArray(stored) ? stored : []).forEach((a) => {
+    const key = `${a.lineId}:${a.assetId}`;
+    const prev = byAsset.get(key);
+    byAsset.set(key, { ...a, at: new Date(a.at), count: (prev?.count ?? 0) + (a.count ?? 1) });
+  });
+  return [...byAsset.values()].sort((x, y) => x.at - y.at);
+};
+
+/** 활성 알람 상한 — 코얼레싱으로 실질 최대는 라인×설비 수지만, 안전망으로 둔다 */
+const ALARM_QUEUE_LIMIT = 20;
+/* 알람 id 일련번호 — 같은 밀리초에 연속 발생해도 id 가 충돌하지 않게 */
+let alarmSeq = 0;
+
 export default function DigitalTwinDashboard() {
   /* 기본은 라이트. 키를 ui.appearance 로 올려 예전 자동 저장값(dark)에 안 끌려간다 */
   const [appearance, setAppearance] = usePersistentState('ui.appearance', 'light');
@@ -118,6 +138,8 @@ export default function DigitalTwinDashboard() {
   const [session, setSession] = usePersistentState('session', null);
   const [mode, setMode] = useState('operation');
   const [plant, setPlant] = useState(PLANTS[0].id);
+  /* 화면 뷰 — 'line': 선택된 라인의 3D 상세, 'overview': 전 라인 관제 */
+  const [view, setView] = useState('line');
   /* 대기열(로트)은 라인별로 완전히 분리된다. 품목 카탈로그(products)만 라인 공용이다.
      대기열·카탈로그·배치·메모·이력은 localStorage 에 저장되어 새로고침에도 유지된다. */
   const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE, reviveJobsByLine);
@@ -133,12 +155,14 @@ export default function DigitalTwinDashboard() {
   const [selectedJobId, setSelectedJobId] = useState(null);
 
   /**
-   * 설비 오류 알람.
-   *  alarm      — 발생한 오류 1건 { lineId, assetId, code, title, detail, at, acked }
+   * 설비 오류 알람 — 다중 큐 (도착 순서 유지, 알림 센터의 데이터 소스).
+   *  각 항목 { id, lineId, assetId, code, title, detail, at(Date), acked }.
+   *  같은 라인·설비·코드가 활성인 동안 중복 발생은 무시한다(게이트웨이 홍수 방지).
+   *  확인(acked) 전에는 비네팅이 깜빡이고, 미확인 중 가장 오래된 1건이 팝업으로 뜬다.
+   *  새로고침에도 유지된다 — 조치 전의 알람이 사라지면 안 된다.
    *  focusRequest — 3D 카메라가 찾아갈 대상. nonce 로 같은 설비 재요청도 구분한다.
-   *  확인(acked) 전에는 비네팅이 깜빡이고 팝업이 떠 있다.
    */
-  const [alarm, setAlarm] = useState(null);
+  const [alarms, setAlarms] = usePersistentState('alarms', [], reviveAlarms);
   const [focusRequest, setFocusRequest] = useState(null);
 
   /* 모달 */
@@ -302,11 +326,19 @@ export default function DigitalTwinDashboard() {
   const taktSec = taktOf(currentJob);
   const animTimeScale = animByLine[plant]?.timeScale ?? 1;
 
-  /* 오류가 걸린 설비 — 3D 하이라이트와 상세 패널이 같은 소스를 본다 */
-  const faults = useMemo(
-    () => (alarm ? { [alarm.lineId]: alarm.assetId } : {}),
-    [alarm]
-  );
+  /* 오류가 걸린 설비 — 3D 하이라이트·텔레메트리·상세 패널이 같은 소스를 본다.
+     { lineId: assetId[] } — 한 라인에 여러 설비가 동시에 아플 수 있다.
+     (라인당 1개로 덮어쓰면 팝업이 데려간 설비에 하이라이트가 없는 삼면 모순이 생긴다) */
+  const faults = useMemo(() => {
+    const out = {};
+    alarms.forEach((a) => {
+      (out[a.lineId] ??= []).push(a.assetId);
+    });
+    return out;
+  }, [alarms]);
+  const unackedAlarms = useMemo(() => alarms.filter((a) => !a.acked), [alarms]);
+  /* 팝업은 미확인 중 가장 오래된 1건 — 확인해야 다음이 뜬다 (놓치면 안 되는 알림) */
+  const modalAlarm = unackedAlarms[0] ?? null;
 
   /**
    * 실린더 만충 연동 — 1세트 = 실린더 1회 충전 (computeCylinder 참조).
@@ -356,21 +388,89 @@ export default function DigitalTwinDashboard() {
       ),
     [eStopByLine, jobsByLine]
   );
-  /* 게이트웨이 알람 — FAULT_SCENARIOS 와 같은 형태라 기존 알람 플로우가 그대로 동작.
-     이미 알람이 떠 있으면 새 알람은 무시한다 (한 번에 하나 — 기존 UX 유지) */
-  const alarmRef = useRef(alarm);
-  alarmRef.current = alarm;
-  const handleGatewayAlarm = useCallback(
+  /**
+   * 알람 발생 — 게이트웨이·소모품 임계·오류 테스트가 전부 이 관문을 지난다.
+   *  정책: 설비(라인×설비)당 활성 알람 1건.
+   *   - 미등록 라인/설비는 입구에서 버린다 — 게이트웨이가 보낸 유령 lineId 가
+   *     영속 큐에 들어가 plant·메모·소모품 키를 오염시키지 못하게.
+   *   - 같은 설비 재발생은 새 항목 대신 기존 건을 갱신(코얼레싱)한다 — code 만
+   *     바꿔 밀어넣는 폭주에도 미확인 큐·팝업이 무한히 자라지 않는다(구버전
+   *     '한 번에 하나' 홍수 방어의 다중 큐 버전). acked 는 유지한다.
+   *   - 상한 초과 시 확인된 것 중 최고참부터 축출하고, 축출도 해제 이벤트를
+   *     남긴다 — '조치 전의 알람이 소리 없이 사라지면 안 된다'는 불변식 유지.
+   *  ref 를 즉시 선점한다 — 연속 프레임 2건이 재렌더 커밋 전에 도착해도
+   *  가드를 둘 다 통과해 이벤트가 이중 기록되지 않게.
+   */
+  const alarmsRef = useRef(alarms);
+  alarmsRef.current = alarms;
+  const raiseAlarm = useCallback(
     (a) => {
-      if (alarmRef.current) return;
-      const next = { ...a, at: new Date(), acked: false };
-      /* ref 를 즉시 선점한다 — 연속 프레임 2건이 재렌더 커밋 전에 도착해도
-         가드를 둘 다 통과해 이벤트가 이중 기록되지 않게 (해제는 렌더 동기화가 처리) */
-      alarmRef.current = next;
-      setAlarm(next);
+      if (!PLANTS.some((p) => p.id === a.lineId) || !findAsset(a.assetId)) {
+        console.warn('[alarm] 미등록 라인/설비 알람 무시:', a.lineId, a.assetId, a.code);
+        return false;
+      }
+      const existing = alarmsRef.current.find(
+        (x) => x.lineId === a.lineId && x.assetId === a.assetId
+      );
+      if (existing) {
+        if (existing.code === a.code) return false; // 같은 오류 재송신 — count 만 셀 것도 없이 무시
+        const merged = {
+          ...existing,
+          code: a.code,
+          title: a.title,
+          detail: a.detail,
+          at: new Date(),
+          count: (existing.count ?? 1) + 1,
+        };
+        const queue = alarmsRef.current.map((x) => (x === existing ? merged : x));
+        alarmsRef.current = queue;
+        setAlarms(queue);
+        logEvent('ALARM_RAISED', `[${a.code}] ${a.title} (기존 ${existing.code} 갱신)`, {
+          lineId: a.lineId,
+          assetId: a.assetId,
+        });
+        return false;
+      }
+      const next = {
+        ...a,
+        id: `AL-${Date.now()}-${a.lineId}-${a.assetId}-${(alarmSeq = (alarmSeq + 1) % 1000)}`,
+        at: new Date(),
+        acked: false,
+        count: 1,
+      };
+      let queue = [...alarmsRef.current, next];
+      if (queue.length > ALARM_QUEUE_LIMIT) {
+        const victim = queue.find((x) => x.acked) ?? queue[0];
+        queue = queue.filter((x) => x !== victim);
+        logEvent(
+          'ALARM_CLEARED',
+          `[${victim.code}] ${victim.title} 자동 해제 (알람 큐 상한 ${ALARM_QUEUE_LIMIT}건 초과)`,
+          { lineId: victim.lineId, assetId: victim.assetId }
+        );
+      }
+      alarmsRef.current = queue;
+      setAlarms(queue);
       logEvent('ALARM_RAISED', `[${a.code}] ${a.title}`, { lineId: a.lineId, assetId: a.assetId });
+      return true;
     },
-    [logEvent]
+    [logEvent, setAlarms]
+  );
+  const handleGatewayAlarm = raiseAlarm;
+
+  /** 알람 해제 — 알림 센터·교체·오류 테스트가 쓴다 */
+  const clearAlarm = useCallback(
+    (id, why = '') => {
+      const target = alarmsRef.current.find((a) => a.id === id);
+      if (!target) return;
+      const queue = alarmsRef.current.filter((a) => a.id !== id);
+      alarmsRef.current = queue;
+      setAlarms(queue);
+      logEvent('ALARM_CLEARED', `[${target.code}] ${target.title} 해제${why ? ` (${why})` : ''}`, {
+        lineId: target.lineId,
+        assetId: target.assetId,
+      });
+    },
+    [logEvent, setAlarms]
   );
 
   const telemetry = useTelemetry({
@@ -379,8 +479,9 @@ export default function DigitalTwinDashboard() {
     sourceConfig: telemetryConfig,
     onAlarm: handleGatewayAlarm,
   });
+  /* 같은 설비에 여러 건이면 가장 최근 건을 상세 패널에 보여준다 */
   const selectedAssetFault =
-    alarm && alarm.lineId === plant && alarm.assetId === selectedId ? alarm : null;
+    alarms.findLast((a) => a.lineId === plant && a.assetId === selectedId) ?? null;
 
   /**
    * 설비 보전 — 라인이 처리한 EA 만큼 소모품이 실제로 닳는다.
@@ -434,39 +535,48 @@ export default function DigitalTwinDashboard() {
   );
 
   /**
-   * 오류 상황 테스트 — 무작위 라인 · 무작위 시나리오로 알람을 발생시킨다.
-   * 이미 발생한 오류가 있으면 해제 버튼으로 동작한다.
+   * 오류 상황 테스트 — 알람이 없는 설비 중에서 무작위로 1건 발생시킨다.
+   *  (다중 큐가 되면서 토글 해제는 알림 센터의 건별 해제로 넘어갔다)
+   *  무작위 재추첨이 아니라 비활성 조합에서 뽑는다 — 활성이 많아도 남은 조합이
+   *  있는 한 클릭이 무동작으로 끝나지 않는다. 전 설비가 활성이면 만들 것이 없다.
    */
   const handleFaultTest = () => {
-    if (alarm) {
-      logEvent('ALARM_CLEARED', `[${alarm.code}] ${alarm.title} 해제`, {
-        lineId: alarm.lineId,
-        assetId: alarm.assetId,
-      });
-      setAlarm(null);
-      return;
+    const idle = [];
+    for (const line of PLANTS) {
+      for (const sc of FAULT_SCENARIOS) {
+        if (!alarmsRef.current.some((x) => x.lineId === line.id && x.assetId === sc.assetId)) {
+          idle.push({ lineId: line.id, sc });
+        }
+      }
     }
-    const scenario = FAULT_SCENARIOS[Math.floor(Math.random() * FAULT_SCENARIOS.length)];
-    const line = PLANTS[Math.floor(Math.random() * PLANTS.length)];
-    setAlarm({ ...scenario, lineId: line.id, at: new Date(), acked: false });
-    logEvent('ALARM_RAISED', `[${scenario.code}] ${scenario.title}`, {
-      lineId: line.id,
-      assetId: scenario.assetId,
-    });
+    if (idle.length === 0) return;
+    const pick = idle[Math.floor(Math.random() * idle.length)];
+    raiseAlarm({ ...pick.sc, lineId: pick.lineId });
   };
 
-  /** 알람 확인 — 비네팅을 멈추고, 해당 라인으로 전환한 뒤 그 설비를 선택·줌인한다 */
-  const handleGoToFault = () => {
-    if (!alarm) return;
-    setAlarm((prev) => ({ ...prev, acked: true }));
-    setPlant(alarm.lineId);
+  /**
+   * 알람 확인/재조회 — 해당 라인으로 전환한 뒤 그 설비를 선택·줌인한다.
+   *  확인 처리(acked + 감사 이벤트)는 미확인일 때 한 번만 — 알림 센터에서
+   *  위치 재조회로 반복 클릭해도 ALARM_ACKED 가 중복 기록되지 않는다.
+   */
+  const handleGoToFault = (id) => {
+    const target = alarms.find((a) => a.id === id);
+    if (!target) return;
+    if (!target.acked) {
+      setAlarms((prev) => prev.map((a) => (a.id === id ? { ...a, acked: true } : a)));
+      logEvent('ALARM_ACKED', `[${target.code}] ${target.title} 확인`, {
+        lineId: target.lineId,
+        assetId: target.assetId,
+      });
+    }
+    /* raiseAlarm 입구 검증이 있어 큐의 lineId 는 항상 유효하지만, 저장분까지
+       못 믿는 상황을 대비해 이동은 등록된 라인일 때만 한다 (이중 방어) */
+    if (!PLANTS.some((p) => p.id === target.lineId)) return;
+    setPlant(target.lineId);
     setSelectedJobId(null);
-    setSelectedId(alarm.assetId);
-    setFocusRequest({ assetId: alarm.assetId, nonce: Date.now() });
-    logEvent('ALARM_ACKED', `[${alarm.code}] ${alarm.title} 확인`, {
-      lineId: alarm.lineId,
-      assetId: alarm.assetId,
-    });
+    setSelectedId(target.assetId);
+    setFocusRequest({ assetId: target.assetId, nonce: Date.now() });
+    setView('line');
   };
 
   /** 비상 정지 — 지금 선택된 라인만 세우거나 해제한다 */
@@ -636,18 +746,12 @@ export default function DigitalTwinDashboard() {
       `${plantName} ${asset.nameKo} ${rec.label} 교체 (잔량 ${Math.round(rec.percentBefore)}% → 100%)`,
       { lineId: plant, assetId }
     );
-    if (
-      alarm &&
-      alarm.lineId === plant &&
-      alarm.assetId === assetId &&
-      String(alarm.code).startsWith('M-')
-    ) {
-      logEvent('ALARM_CLEARED', `[${alarm.code}] ${alarm.title} 해제 (소모품 교체)`, {
-        lineId: plant,
-        assetId,
-      });
-      setAlarm(null);
-    }
+    /* 이 소모품 때문에 뜬 알람(M- 코드)들은 교체로 조치 완료 — 함께 해제 */
+    alarms
+      .filter(
+        (a) => a.lineId === plant && a.assetId === assetId && String(a.code).startsWith('M-')
+      )
+      .forEach((a) => clearAlarm(a.id, '소모품 교체'));
   };
 
   /** 엑셀에서 선택된 행들을 '선택된 라인' 로트로 추가하고, 미등록 품목은 카탈로그에 등록한다 */
@@ -685,6 +789,59 @@ export default function DigitalTwinDashboard() {
     return <LoginScreen theme={theme} onLogin={handleLogin} />;
   }
 
+  /**
+   * 관제 뷰 데이터 — 라인별 요약 카드 한 장에 필요한 전부.
+   *  관제 뷰가 열려 있을 때만 계산한다 (매초 리렌더에서 불필요한 집계 방지).
+   */
+  const todayStr = fmtDate(new Date());
+  const overviewData =
+    view === 'overview'
+      ? PLANTS.map((l) => {
+          const queue = jobsByLine[l.id] ?? [];
+          const head = queue[0] ?? null;
+          const lineElapsed = elapsedByLine[l.id] ?? 0;
+          const doneEa = head ? completedEaAt(lineElapsed, head.qty, taktOf(head)) : 0;
+          const s = lineStats[l.id] ?? {};
+          const lineProd = production.filter((p) => p.lineId === l.id);
+          const planned = lineProd.reduce((a, p) => a + (p.plannedSec ?? 0), 0);
+          const actual = lineProd.reduce((a, p) => a + (p.actualSec ?? 0), 0);
+          const denomA = (s.runSec ?? 0) + (s.downSec ?? 0);
+          const availability = denomA > 0 ? (s.runSec ?? 0) / denomA : null;
+          const performance = actual > 0 ? Math.min(1, planned / actual) : null;
+          const quality = (s.produced ?? 0) > 0 ? (s.produced - (s.defects ?? 0)) / s.produced : null;
+          const oee =
+            availability != null && performance != null && quality != null
+              ? availability * performance * quality
+              : null;
+          const liveAssets = lineSelectableAssets(l.id).map((a) =>
+            withLiveConsumable(a, consumablePercents)
+          );
+          const worst = liveAssets
+            .filter((a) => a.consumable)
+            .reduce((min, a) => (min && min.consumable.percent <= a.consumable.percent ? min : a), null);
+          return {
+            lineId: l.id,
+            name: l.name,
+            eStop: Boolean(eStopByLine[l.id]),
+            alarms: alarms.filter((a) => a.lineId === l.id),
+            head,
+            queueCount: queue.length,
+            remainQty: queue.reduce((sum, j) => sum + j.qty, 0) - doneEa,
+            progress: head ? Math.min(100, (lineElapsed / head.totalSec) * 100) : 0,
+            doneEa,
+            cylinder: cylinderOf(l.id),
+            todayQty: lineProd
+              .filter((p) => fmtDate(new Date(p.finishedAt)) === todayStr)
+              .reduce((sum, p) => sum + p.qty, 0),
+            oee,
+            availability,
+            worstConsumable: worst
+              ? { name: worst.nameKo, label: worst.consumable.label, percent: worst.consumable.percent }
+              : null,
+          };
+        })
+      : null;
+
   return (
     <div className={`w-screen h-screen overflow-hidden flex flex-col font-sans ${theme.appBg} ${theme.textSecondary} transition-colors duration-300`}>
       {/* 시뮬레이션 / E-STOP 전역 프레임 */}
@@ -693,8 +850,8 @@ export default function DigitalTwinDashboard() {
           ${eStopEngaged ? 'ring-red-500/70' : theme.frameRing}`}
       />
 
-      {/* 설비 오류 경광등 — 확인(설비로 이동) 전까지 깜빡인다 */}
-      {alarm && !alarm.acked && (
+      {/* 설비 오류 경광등 — 미확인 알람이 하나라도 있으면 깜빡인다 */}
+      {unackedAlarms.length > 0 && (
         <div className="alarm-vignette pointer-events-none fixed inset-0 z-40" aria-hidden />
       )}
 
@@ -713,7 +870,6 @@ export default function DigitalTwinDashboard() {
         speed={speed}
         appearance={appearance}
         onToggleAppearance={() => setAppearance((a) => (a === 'dark' ? 'light' : 'dark'))}
-        faultActive={Boolean(alarm)}
         onFaultTest={handleFaultTest}
         faultTestAllowed={can('fault.test')}
         faultTestHint={PERMISSION_HINTS['fault.test']}
@@ -721,9 +877,29 @@ export default function DigitalTwinDashboard() {
         user={session}
         onLogout={handleLogout}
         onStartTutorial={() => setTutorialOpen(true)}
+        view={view}
+        onViewChange={setView}
+        alarms={alarms}
+        onAlarmGoTo={handleGoToFault}
+        onAlarmClear={(id) => clearAlarm(id, '수동 해제')}
+        canClearAlarm={can('fault.test')}
+        clearAlarmHint={PERMISSION_HINTS['fault.test']}
       />
 
-      <div className="relative flex-1 min-h-0 flex">
+      {/* 전 라인 관제 뷰 — 3D 뷰는 언마운트하지 않고 숨긴다 (GLB 재로딩 방지) */}
+      {view === 'overview' && (
+        <PlantOverview
+          theme={theme}
+          data={overviewData}
+          now={now}
+          onEnterLine={(lineId) => {
+            handlePlantChange(lineId);
+            setView('line');
+          }}
+        />
+      )}
+
+      <div className={`relative flex-1 min-h-0 ${view === 'overview' ? 'hidden' : 'flex'}`}>
         <LeftDashboardPanel
           theme={theme}
           mode={mode}
@@ -851,14 +1027,15 @@ export default function DigitalTwinDashboard() {
         </div>
       </footer>
 
-      {/* 설비 오류 알람 — 확인 전까지 최상단에 떠 있는다 */}
-      {alarm && !alarm.acked && (
+      {/* 설비 오류 알람 — 미확인 중 가장 오래된 1건. 확인해야 다음 건이 뜬다 */}
+      {modalAlarm && (
         <FaultAlarmModal
           theme={theme}
-          alarm={alarm}
-          lineName={PLANTS.find((p) => p.id === alarm.lineId)?.name ?? alarm.lineId}
-          asset={findLineAsset(alarm.lineId, alarm.assetId)}
-          onGoTo={handleGoToFault}
+          alarm={modalAlarm}
+          pendingCount={unackedAlarms.length - 1}
+          lineName={PLANTS.find((p) => p.id === modalAlarm.lineId)?.name ?? modalAlarm.lineId}
+          asset={findLineAsset(modalAlarm.lineId, modalAlarm.assetId)}
+          onGoTo={() => handleGoToFault(modalAlarm.id)}
         />
       )}
 

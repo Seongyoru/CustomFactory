@@ -5,12 +5,13 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, GraduationCap, LogOut, Moon, Siren, Sun, User,
+  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, GraduationCap, LayoutGrid, LogOut, Moon, Siren, Sun, User,
 } from 'lucide-react';
 import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
 import { ROLES } from '../../auth/auth.js';
 import { fmtClock, fmtDuration, fmtSpeed } from '../../lib/format.js';
 import { BrandLogo } from '../ui.jsx';
+import AlarmCenter from './AlarmCenter.jsx';
 
 const PLANTS = PRODUCTION_LINES;
 
@@ -18,8 +19,10 @@ const TopGnb = ({
   theme, mode, onModeChange, plant, onPlantChange,
   eStopEngaged, onEStop, eStopAllowed = true, eStopHint,
   now, simElapsed, speed,
-  appearance, onToggleAppearance, faultActive, onFaultTest, faultTestAllowed = true, faultTestHint,
+  appearance, onToggleAppearance, onFaultTest, faultTestAllowed = true, faultTestHint,
   onOpenReport, user, onLogout, onStartTutorial,
+  view = 'line', onViewChange,
+  alarms = [], onAlarmGoTo, onAlarmClear, canClearAlarm = true, clearAlarmHint,
 }) => {
   /* 프로필 드롭다운 — 바깥 클릭으로 닫힌다 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,6 +50,22 @@ const TopGnb = ({
         </div>
       </div>
 
+      {/* 전 라인 관제 뷰 전환 — 라인 선택 옆이 '어디를 보고 있는가'의 자리다 */}
+      <button
+        type="button"
+        data-tour="overview"
+        onClick={() => onViewChange?.(view === 'overview' ? 'line' : 'overview')}
+        title={view === 'overview' ? '선택된 라인의 3D 상세로 돌아갑니다' : '전 라인 관제 화면을 엽니다'}
+        className={`flex items-center gap-1.5 h-9 px-3 rounded-lg border text-[11px] font-semibold whitespace-nowrap
+          transition-colors focus:outline-none focus:ring-2 ${theme.accentRing}
+          ${view === 'overview'
+            ? `${theme.accentBg} text-white border-transparent`
+            : `${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg}`}`}
+      >
+        <LayoutGrid className="w-3.5 h-3.5" />
+        전체 현황
+      </button>
+
       <div className="relative" data-tour="line">
         <Factory className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none ${theme.textMuted}`} />
         <select
@@ -65,24 +84,21 @@ const TopGnb = ({
 
     {/* --- 중앙: 오류 테스트 + 운전 / 시뮬레이션 토글 --- */}
     <div className="flex items-center gap-2.5">
-      {/* 개발/데모용 — 실제 연동 시에는 OPC-UA 알람 수신으로 대체된다 */}
+      {/* 개발/데모용 — 실제 연동 시에는 OPC-UA 알람 수신으로 대체된다.
+          해제는 알림 센터에서 건별로 한다 (다중 알람 큐) */}
       <button
         type="button"
         data-tour="fault"
         onClick={onFaultTest}
         disabled={!faultTestAllowed}
-        title={!faultTestAllowed
-          ? faultTestHint
-          : faultActive ? '발생시킨 오류를 해제합니다' : '설비 오류 상황을 임의로 발생시킵니다'}
+        title={!faultTestAllowed ? faultTestHint : '설비 오류 상황을 임의로 1건 발생시킵니다 (해제는 알림 센터)'}
         className={`flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-semibold whitespace-nowrap
           transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/40
           disabled:opacity-30 disabled:cursor-not-allowed
-          ${faultActive
-            ? 'border-red-500/50 bg-red-500/10 text-red-500 hover:bg-red-500/20'
-            : `${theme.panelBorder} ${theme.textMuted} ${theme.hoverBg}`}`}
+          ${theme.panelBorder} ${theme.textMuted} ${theme.hoverBg}`}
       >
         <Siren className="w-3.5 h-3.5" />
-        {faultActive ? '오류 해제' : '오류 상황 테스트'}
+        오류 상황 테스트
       </button>
 
       <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`} data-tour="mode">
@@ -135,6 +151,16 @@ const TopGnb = ({
           {mode === 'operation' ? fmtClock(now) : `T+ ${fmtDuration(simElapsed)}`}
         </span>
       </div>
+
+      {/* 알림 센터 — 활성 알람 큐 */}
+      <AlarmCenter
+        theme={theme}
+        alarms={alarms}
+        onGoTo={onAlarmGoTo}
+        onClear={onAlarmClear}
+        canClear={canClearAlarm}
+        clearHint={clearAlarmHint}
+      />
 
       {/* 다크 / 라이트 전환 */}
       <button

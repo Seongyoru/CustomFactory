@@ -85,12 +85,13 @@ export function createSimulatedSource({ getContext }) {
 
     PRODUCTION_LINES.forEach((line) => {
       const stopped = Boolean(stoppedByLine[line.id]);
-      const faultedAsset = faults[line.id] ?? null;
+      /* 라인당 오류 설비 여러 개 — { lineId: assetId[] } */
+      const faultedAssets = faults[line.id] ?? [];
 
       SELECTABLE_ASSETS.forEach((asset) => {
         const cur = state[line.id][asset.id];
         const base = TELEMETRY_BASELINES[asset.id] ?? AMBIENT;
-        const faulted = faultedAsset === asset.id;
+        const faulted = faultedAssets.includes(asset.id);
 
         /* 상황별 수렴 목표 */
         const target = faulted

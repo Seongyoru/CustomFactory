@@ -11,7 +11,7 @@ import { Crosshair, Siren } from 'lucide-react';
 import { fmtClock, fmtDate } from '../../lib/format.js';
 import { Modal } from '../ui.jsx';
 
-const FaultAlarmModal = ({ theme, alarm, lineName, asset, onGoTo }) => (
+const FaultAlarmModal = ({ theme, alarm, lineName, asset, onGoTo, pendingCount = 0 }) => (
   <Modal theme={theme} onClose={() => {}} className="w-[480px]">
     <div className="border-b-4 border-red-600">
       <header className="flex items-center gap-3 px-5 py-4 bg-red-600/15">
@@ -65,6 +65,13 @@ const FaultAlarmModal = ({ theme, alarm, lineName, asset, onGoTo }) => (
         <Crosshair className="w-4 h-4" />
         해당 설비로 이동
       </button>
+
+      {/* 알람이 밀려 있으면 알려준다 — 확인하면 다음 건이 이어서 뜬다 */}
+      {pendingCount > 0 && (
+        <p className="text-center text-[11px] font-semibold text-red-500">
+          미확인 알람 {pendingCount}건이 더 있습니다 — 확인하면 이어서 표시됩니다.
+        </p>
+      )}
     </div>
   </Modal>
 );

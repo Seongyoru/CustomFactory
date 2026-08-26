@@ -493,9 +493,11 @@ function StaticModel({ asset, offset, clock, opacity = 1 }) {
  *   원점이 한 번 더 곱해져 기즈모만 라인 간격(10m)만큼 어긋난 자리에 뜬다.
  *   설비 좌표에 원점을 미리 더해 전부 월드 좌표에 놓으면 이 이중 적용이 사라진다.
  */
+/* 오류 설비 없음의 고정 참조 — 매 렌더 새 배열로 memo 를 깨지 않게 */
+const EMPTY_FAULTS = [];
 function LineGroup({
   line, active, selectedId, onSelect, onMove, onDragChange, accentHex, offsets, clock,
-  faultedAssetId, stopped, registerObject,
+  faultedAssetIds, stopped, registerObject,
 }) {
   /* clock 은 이 라인 전용 시계다 — 비상 정지도 라인 단위로 걸린다 */
   const [ox, oy, oz] = line.origin;
@@ -521,7 +523,7 @@ function LineGroup({
             onDragChange={onDragChange}
             accentHex={accentHex}
             clock={clock}
-            faulted={asset.id === faultedAssetId}
+            faulted={faultedAssetIds.includes(asset.id)}
             stopped={stopped}
             registerObject={registerObject}
           />
@@ -854,7 +856,7 @@ function SceneContents({
           accentHex={accentHex}
           offsets={offsetsByLine[line.id] ?? {}}
           clock={clocks[line.id]}
-          faultedAssetId={faults?.[line.id] ?? null}
+          faultedAssetIds={faults?.[line.id] ?? EMPTY_FAULTS}
           stopped={Boolean(animByLine[line.id]?.paused)}
           registerObject={line.id === activeLineId ? registerObject : undefined}
         />
