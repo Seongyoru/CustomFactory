@@ -4,6 +4,7 @@
  * =============================================================================
  */
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Boxes, Info } from 'lucide-react';
 import { STATUS } from '../data/factoryAssets.js';
 import { assetUrl } from '../lib/baseUrl.js';
@@ -71,18 +72,23 @@ export const HintTip = ({ hint, theme }) => {
       >
         <Info className={`w-3 h-3 ${open ? theme.accentText : theme.textGhost}`} />
       </button>
-      {open && (
-        <span
-          role="tooltip"
-          /* 패널과 확실히 구분되는 반전(다크) 말풍선 — 라이트/다크 테마 어디서나 대비가 선다.
-             z-[90]: 사이드바(z-20)·모달(z-50) 위, 튜토리얼 오버레이(z-100) 아래 */
-          className="fixed z-[90] -translate-x-1/2 rounded-lg border border-slate-600/50 bg-slate-900/95
-            px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-xl shadow-black/30 backdrop-blur-sm"
-          style={{ left: pos.x, top: pos.top, bottom: pos.bottom, width: TOOLTIP_W }}
-        >
-          {hint}
-        </span>
-      )}
+      {open &&
+        /* body 로 포털 — Panel 의 backdrop-filter 가 fixed 자손의 기준을 패널로
+           바꿔버려(containing block), 툴팁이 엉뚱한 위치에 뜨고 뒤 패널에 가려졌다.
+           body 직속이면 fixed 가 진짜 뷰포트 기준이고 스태킹도 패널 밖이다. */
+        createPortal(
+          <span
+            role="tooltip"
+            /* 패널과 확실히 구분되는 반전(다크) 말풍선 — 라이트/다크 테마 어디서나 대비가 선다.
+               z-[90]: 사이드바(z-20)·모달(z-50) 위, 튜토리얼 오버레이(z-100) 아래 */
+            className="fixed z-[90] -translate-x-1/2 rounded-lg border border-slate-600/50 bg-slate-900/95
+              px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-xl shadow-black/30 backdrop-blur-sm"
+            style={{ left: pos.x, top: pos.top, bottom: pos.bottom, width: TOOLTIP_W }}
+          >
+            {hint}
+          </span>,
+          document.body
+        )}
     </span>
   );
 };
