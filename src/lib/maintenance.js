@@ -111,6 +111,76 @@ export const daysUntil = (dateStr, now = new Date()) => {
   return Math.round((target - today) / 86_400_000);
 };
 
+/**
+ * 보전 지표 — 이벤트 로그(ALARM_RAISED/ACKED/CLEARED)에서 설비별로 산출한다.
+ *  하나의 '고장 건'은 발생(RAISED)으로 열리고 해제(CLEARED)로 닫힌다.
+ *  열려 있는 동안의 추가 RAISED 는 코얼레싱 갱신이므로 같은 건으로 본다.
+ *   - occurrences: 고장 건수 (열린 건 포함)
+ *   - mttaSec: 평균 확인 시간 (발생 → 첫 ACKED)
+ *   - mttrSec: 평균 복구 시간 (발생 → CLEARED, 닫힌 건만)
+ *   - mtbfSec: 평균 고장 간격 (연속 발생 시각의 간격 평균, 2건 이상일 때)
+ *   - openSince: 지금 열려 있는 건의 발생 시각 (없으면 null)
+ *  이벤트 로그는 보관 상한이 있으므로(EVENT_LOG_LIMIT) '보관분 기준' 지표다 —
+ *  표시할 때 그 사실을 함께 말해야 정직하다.
+ */
+export const maintenanceKpis = (events) => {
+  /* 오래된 것부터 시간순으로 — events 는 최신순 저장이다 */
+  const chrono = [...(events ?? [])]
+    .filter((e) => e.type?.startsWith('ALARM_') && e.lineId && e.assetId)
+    .reverse();
+  const byAsset = new Map();
+  for (const e of chrono) {
+    const key = `${e.lineId}:${e.assetId}`;
+    let s = byAsset.get(key);
+    if (!s) {
+      s = {
+        lineId: e.lineId,
+        assetId: e.assetId,
+        occurrences: 0,
+        raisedAts: [],
+        ackSecs: [],
+        repairSecs: [],
+        open: null, // { at, acked }
+      };
+      byAsset.set(key, s);
+    }
+    const t = new Date(e.at).getTime();
+    if (e.type === 'ALARM_RAISED') {
+      if (!s.open) {
+        s.open = { at: t, acked: false };
+        s.occurrences += 1;
+        s.raisedAts.push(t);
+      }
+      /* 열려 있는 중의 RAISED = 코얼레싱 갱신 — 새 건으로 세지 않는다 */
+    } else if (e.type === 'ALARM_ACKED') {
+      if (s.open && !s.open.acked) {
+        s.open.acked = true;
+        s.ackSecs.push((t - s.open.at) / 1000);
+      }
+    } else if (e.type === 'ALARM_CLEARED') {
+      if (s.open) {
+        s.repairSecs.push((t - s.open.at) / 1000);
+        s.open = null;
+      }
+    }
+  }
+  const avg = (xs) => (xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  return [...byAsset.values()]
+    .map((s) => ({
+      lineId: s.lineId,
+      assetId: s.assetId,
+      occurrences: s.occurrences,
+      mttaSec: avg(s.ackSecs),
+      mttrSec: avg(s.repairSecs),
+      mtbfSec:
+        s.raisedAts.length >= 2
+          ? (s.raisedAts[s.raisedAts.length - 1] - s.raisedAts[0]) / 1000 / (s.raisedAts.length - 1)
+          : null,
+      openSince: s.open ? new Date(s.open.at) : null,
+    }))
+    .sort((a, b) => b.occurrences - a.occurrences);
+};
+
 /** 소모품 임계 알람 페이로드 — 기존 오류 알람 플로우(FAULT_SCENARIOS 형태)로 흘린다 */
 export const consumableAlarmOf = (asset, percent) => ({
   assetId: asset.id,

@@ -466,3 +466,15 @@ react-three-fiber는 렌더 루프가 rAF에 묶여 있어 씬이 아예 마운�
 id ms 충돌(해제·확인 연좌), 큐 상한 무단 퇴출(감사 단절), 유령 lineId 인그레스,
 code 순환 홍수(모달 영구 잠금 회귀), faults 라인당 1건 덮어쓰기(삼면 모순),
 acked 재확인 이벤트 중복, 오류 테스트 무작위 무동작 — 전부 수정 반영.
+
+---
+
+## 보전 지표(MTTA/MTTR/MTBF) + 일일 보고서 인쇄 (2026-08-27)
+
+### 대응
+| 대상 | 변경 |
+|---|---|
+| `maintenanceKpis` (lib/maintenance.js) | 이벤트 로그(ALARM_RAISED/ACKED/CLEARED)에서 설비별 발생 건수·MTTA(평균 확인)·MTTR(평균 복구)·MTBF(평균 고장 간격)·조치 중 여부 산출. 열려 있는 중의 RAISED(코얼레싱 갱신)는 같은 건으로 봄. 로그 보관 상한이 있으므로 "보관분 기준"을 표기 |
+| 리포트 센터 | 설비 보전 탭에 보전 지표 표 추가, 엑셀에 '보전 지표' 시트 |
+| 인쇄(PDF) | 리포트 헤더 '인쇄' 버튼 → window.print. `PrintReport`(body 포털, .print-sheet)가 인쇄 시에만 표시되고 #root 는 숨김(index.css @media print, A4 여백). 내용: 금일 요약·라인 OEE·금일 완료 로트·보전 현황·보전 지표·금일 알람·교체 이력. 브라우저 'PDF로 저장' = PDF 내보내기. 종이는 테마 무관 흑백 고정 |
+| 테스트 | maintenanceKpis 4건 (80/80 통과) |

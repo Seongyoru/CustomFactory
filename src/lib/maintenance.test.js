@@ -9,6 +9,7 @@ import {
   consumableAlarmOf,
   consumablePercentOf,
   daysUntil,
+  maintenanceKpis,
   remainingEaOf,
   withLiveConsumable,
   withMaintHistory,
@@ -109,5 +110,64 @@ describe('maintenance — 표시 병합', () => {
 
   it('임계 상수의 순서 — crit 는 warn 보다 아래다', () => {
     expect(CONSUMABLE_CRIT_PCT).toBeLessThan(CONSUMABLE_WARN_PCT);
+  });
+});
+
+describe('maintenance — 보전 지표 (MTTA/MTTR/MTBF)', () => {
+  /* 이벤트는 최신순 저장이 실제 형태 — 헬퍼는 시간순으로 쓰고 뒤집어 만든다 */
+  const ev = (type, minute, lineId = 'L1', assetId = 'CUTTING_UNIT') => ({
+    type,
+    at: new Date(2026, 7, 27, 10, minute).toISOString(),
+    lineId,
+    assetId,
+  });
+  const newestFirst = (list) => [...list].reverse();
+
+  it('발생→확인→해제 1건: 건수 1, MTTA/MTTR 정확, 열린 건 없음', () => {
+    const kpis = maintenanceKpis(
+      newestFirst([ev('ALARM_RAISED', 0), ev('ALARM_ACKED', 2), ev('ALARM_CLEARED', 10)])
+    );
+    expect(kpis).toHaveLength(1);
+    expect(kpis[0].occurrences).toBe(1);
+    expect(kpis[0].mttaSec).toBe(120);
+    expect(kpis[0].mttrSec).toBe(600);
+    expect(kpis[0].mtbfSec).toBeNull(); // 1건으로는 간격이 없다
+    expect(kpis[0].openSince).toBeNull();
+  });
+
+  it('열려 있는 중의 RAISED(코얼레싱 갱신)는 새 건으로 세지 않는다', () => {
+    const kpis = maintenanceKpis(
+      newestFirst([
+        ev('ALARM_RAISED', 0),
+        ev('ALARM_RAISED', 1), // 갱신
+        ev('ALARM_CLEARED', 5),
+        ev('ALARM_RAISED', 20), // 두 번째 실제 건 — 미해제
+      ])
+    );
+    expect(kpis[0].occurrences).toBe(2);
+    expect(kpis[0].mttrSec).toBe(300); // 닫힌 건만
+    expect(kpis[0].mtbfSec).toBe(20 * 60); // 발생 간격 0분→20분
+    expect(kpis[0].openSince).toEqual(new Date(2026, 7, 27, 10, 20));
+  });
+
+  it('설비·라인별로 분리 집계하고 건수 많은 순으로 정렬한다', () => {
+    const kpis = maintenanceKpis(
+      newestFirst([
+        ev('ALARM_RAISED', 0, 'L1', 'CONVEYOR_UNIT'),
+        ev('ALARM_CLEARED', 1, 'L1', 'CONVEYOR_UNIT'),
+        ev('ALARM_RAISED', 2, 'L2', 'CONVEYOR_UNIT'),
+        ev('ALARM_RAISED', 3, 'L1', 'CONVEYOR_UNIT'),
+        ev('ALARM_CLEARED', 4, 'L1', 'CONVEYOR_UNIT'),
+      ])
+    );
+    expect(kpis).toHaveLength(2);
+    expect(kpis[0]).toMatchObject({ lineId: 'L1', occurrences: 2 });
+    expect(kpis[1]).toMatchObject({ lineId: 'L2', occurrences: 1 });
+  });
+
+  it('발생 없이 온 ACKED/CLEARED(로그 상한 절단)는 조용히 무시한다', () => {
+    const kpis = maintenanceKpis(newestFirst([ev('ALARM_ACKED', 0), ev('ALARM_CLEARED', 1)]));
+    expect(kpis[0].occurrences).toBe(0);
+    expect(kpis[0].mttrSec).toBeNull();
   });
 });

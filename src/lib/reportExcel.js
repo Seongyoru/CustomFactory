@@ -14,7 +14,7 @@ const fmtIso = (iso) => {
 };
 
 export async function downloadReportWorkbook({
-  production, events, lineStats, oeeByLine, simSnapshots = [], maintRows = [], maintLog = [],
+  production, events, lineStats, oeeByLine, simSnapshots = [], maintRows = [], maintLog = [], maintKpis = [],
 }) {
   /* xlsx 는 내보내기를 실제로 누를 때만 내려받는다 */
   const XLSX = await import('xlsx');
@@ -102,6 +102,21 @@ export async function downloadReportWorkbook({
     const wsMaint = XLSX.utils.aoa_to_sheet(maintSheetRows);
     wsMaint['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 9 }, { wch: 13 }, { wch: 12 }, { wch: 8 }];
     XLSX.utils.book_append_sheet(wb, wsMaint, '설비 보전');
+  }
+  if (maintKpis.length > 0) {
+    const kpiRows = [
+      ['라인', '설비 ID', '발생(건)', 'MTTA(초)', 'MTTR(초)', 'MTBF(초)', '조치 중 발생 시각'],
+      ...maintKpis.map((k) => [
+        lineName(k.lineId), k.assetId, k.occurrences,
+        k.mttaSec == null ? '' : Math.round(k.mttaSec),
+        k.mttrSec == null ? '' : Math.round(k.mttrSec),
+        k.mtbfSec == null ? '' : Math.round(k.mtbfSec),
+        k.openSince ? fmtIso(k.openSince) : '',
+      ]),
+    ];
+    const wsKpi = XLSX.utils.aoa_to_sheet(kpiRows);
+    wsKpi['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, wsKpi, '보전 지표');
   }
   if (maintLog.length > 0) {
     const replaceRows = [

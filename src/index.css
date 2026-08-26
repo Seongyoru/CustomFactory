@@ -20,6 +20,33 @@ body {
   overflow: hidden;
 }
 
+/* -----------------------------------------------------------------------
+ * 일일 보고서 인쇄 — 화면은 앱, 인쇄는 보고서 시트만
+ * 리포트 센터의 '인쇄' 버튼(window.print)과 PrintReport(.print-sheet, body
+ * 포털)가 이 규칙과 짝이다. 브라우저의 'PDF로 저장'이 곧 PDF 내보내기.
+ * --------------------------------------------------------------------- */
+.print-sheet {
+  display: none;
+}
+@media print {
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+  #root {
+    display: none !important;
+  }
+  .print-sheet {
+    display: block !important;
+  }
+  @page {
+    size: A4;
+    margin: 14mm 12mm;
+  }
+}
+
 /* 다크 UI 에 맞춘 얇은 스크롤바 */
 ::-webkit-scrollbar {
   width: 6px;

@@ -13,13 +13,14 @@
  */
 import React, { useMemo, useState } from 'react';
 import {
-  Activity, AlertOctagon, BarChart3, FileDown, ListChecks, ScrollText, Siren, Trash2, Wrench, X,
+  Activity, AlertOctagon, BarChart3, FileDown, ListChecks, Printer, ScrollText, Siren, Trash2, Wrench, X,
 } from 'lucide-react';
-import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
+import { PRODUCTION_LINES, findAsset } from '../../data/factoryAssets.js';
 import { lineSelectableAssets } from '../../data/lineAssets.js';
 import {
-  CONSUMABLE_WARN_PCT, consumablePercentOf, daysUntil, remainingEaOf,
+  CONSUMABLE_WARN_PCT, consumablePercentOf, daysUntil, maintenanceKpis, remainingEaOf,
 } from '../../lib/maintenance.js';
+import PrintReport from './PrintReport.jsx';
 import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
@@ -232,6 +233,9 @@ const ReportModal = ({
   const riskyConsumables = maintRows.filter((r) => r.percent <= CONSUMABLE_WARN_PCT);
   const dueChecks = maintRows.filter((r) => r.dDay != null && r.dDay <= 14);
 
+  /* 보전 지표 — 알람 발생·확인·해제 이벤트에서 산출 (이벤트 로그 보관분 기준) */
+  const maintKpis = useMemo(() => maintenanceKpis(events), [events]);
+
   const tabs = [
     { key: 'production', label: '생산 리포트', icon: BarChart3 },
     { key: 'maintenance', label: '설비 보전', icon: Wrench, count: riskyConsumables.length + dueChecks.length },
@@ -254,11 +258,23 @@ const ReportModal = ({
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* 인쇄 — 화면 대신 인쇄 전용 일일 보고서 시트가 출력된다 (브라우저에서 PDF 저장 가능) */}
+          <button
+            type="button"
+            disabled={!canExport}
+            title={!canExport ? exportHint : '일일 보고서를 인쇄합니다 (인쇄 대화상자에서 PDF 저장 가능)'}
+            onClick={() => window.print()}
+            className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-bold
+              ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg}
+              disabled:opacity-30 disabled:cursor-not-allowed`}
+          >
+            <Printer className="w-3.5 h-3.5" /> 인쇄
+          </button>
           <button
             type="button"
             disabled={!canExport}
             title={!canExport ? exportHint : undefined}
-            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots, maintRows, maintLog })}
+            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots, maintRows, maintLog, maintKpis })}
             className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-bold text-white ${theme.accentBg}
               hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
           >
@@ -438,6 +454,51 @@ const ReportModal = ({
                           <span className={`font-semibold ${r.dDay < 0 ? 'text-red-500' : r.dDay <= 14 ? 'text-amber-500' : theme.textGhost}`}>
                             {r.dDay < 0 ? `${-r.dDay}일 지남` : r.dDay === 0 ? '오늘' : `D-${r.dDay}`}
                           </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+
+            {/* 보전 지표 — MTTA/MTTR/MTBF */}
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+              <div className={`flex items-center justify-between px-3 py-2 border-b ${theme.divider} ${theme.headerBg}`}>
+                <span className={`text-[11px] font-bold ${theme.textPrimary}`}>보전 지표 (알람 기준)</span>
+                <span className={`text-[9px] ${theme.textFaint}`}>
+                  이벤트 로그 보관분 기준 · MTTA 평균 확인 / MTTR 평균 복구 / MTBF 평균 고장 간격
+                </span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead className={theme.headerBg}>
+                  <tr className={`border-b ${theme.divider}`}>
+                    {['라인', '설비', '발생', 'MTTA', 'MTTR', 'MTBF', '현재'].map((h) => (
+                      <th key={h} className={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {maintKpis.length === 0 && (
+                    <tr><td colSpan={7} className={`px-3 py-5 text-center ${theme.textFaint}`}>
+                      아직 알람 이력이 없습니다. 오류가 발생·조치되면 지표가 여기에 쌓입니다.
+                    </td></tr>
+                  )}
+                  {maintKpis.map((k) => (
+                    <tr key={`${k.lineId}:${k.assetId}`} className={`border-b last:border-0 ${theme.divider}`}>
+                      <td className={`${td} ${theme.textSecondary}`}>{lineName(k.lineId)}</td>
+                      <td className={`${td} ${theme.textPrimary}`}>{findAsset(k.assetId)?.nameKo ?? k.assetId}</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{k.occurrences}건</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{k.mttaSec == null ? '—' : fmtKoDuration(Math.round(k.mttaSec))}</td>
+                      <td className={`${td} tabular-nums ${theme.textSecondary}`}>{k.mttrSec == null ? '—' : fmtKoDuration(Math.round(k.mttrSec))}</td>
+                      <td className={`${td} tabular-nums ${theme.textFaint}`}>{k.mtbfSec == null ? '—' : fmtKoDuration(Math.round(k.mtbfSec))}</td>
+                      <td className={`${td}`}>
+                        {k.openSince ? (
+                          <span className="text-[10px] font-bold text-red-500">
+                            조치 중 ({fmtClock(k.openSince)}~)
+                          </span>
+                        ) : (
+                          <span className={`text-[10px] ${theme.textGhost}`}>정상</span>
                         )}
                       </td>
                     </tr>
@@ -698,6 +759,18 @@ const ReportModal = ({
           </button>
         </div>
       </footer>
+
+      {/* 인쇄 전용 일일 보고서 — 화면에는 보이지 않고 인쇄 시에만 이것만 출력된다 */}
+      <PrintReport
+        kpis={kpis}
+        oeeByLine={oeeByLine}
+        lineStats={lineStats}
+        production={production}
+        maintRows={maintRows}
+        maintKpis={maintKpis}
+        maintLog={maintLog}
+        alarmEvents={alarmEvents}
+      />
     </Modal>
   );
 };
