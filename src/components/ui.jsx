@@ -21,35 +21,64 @@ export const Panel = ({ theme, className = '', children, ...rest }) => (
  *  말풍선은 fixed 로 띄우고 화면 가장자리에서는 안쪽으로 밀어 넣는다.
  */
 const TOOLTIP_W = 264;
+const TOOLTIP_EST_H = 150; // 플립 판단용 여유 높이 — 실제보다 크게 잡아 아래 잘림을 막는다
 export const HintTip = ({ hint, theme }) => {
-  const [pos, setPos] = useState(null); // null=닫힘, {x, y, pinned}
-  const place = (el, pinned) => {
+  /* null=닫힘. 좌표는 이벤트 핸들러에서 '동기적으로' 계산해 값으로 저장한다.
+     setState 업데이터 안에서 e.currentTarget 을 읽으면, React 가 업데이터를 나중에
+     실행할 때 이벤트가 이미 끝나 null 이라 앱 전체가 죽는다 (실배포에서 재현된 크래시). */
+  const [pos, setPos] = useState(null); // {x, top?|bottom?, pinned}
+  const openFrom = (el, pinned) => {
     const r = el.getBoundingClientRect();
     const half = TOOLTIP_W / 2;
     const x = Math.min(Math.max(r.left + r.width / 2, half + 8), window.innerWidth - half - 8);
-    return { x, y: r.bottom + 6, pinned };
+    /* 아래 공간이 부족하면 아이콘 위로 띄운다 (bottom 기준 배치) */
+    const below = r.bottom + TOOLTIP_EST_H <= window.innerHeight;
+    setPos(
+      below
+        ? { x, top: r.bottom + 6, pinned }
+        : { x, bottom: window.innerHeight - r.top + 6, pinned }
+    );
   };
+
+  /* fixed 배치라 스크롤/리사이즈하면 기준 좌표가 낡는다 — 그냥 닫는 게 정직하다 */
+  const open = pos !== null;
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = () => setPos(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [open]);
+
   return (
     <span
       className="relative inline-flex"
-      onMouseEnter={(e) => setPos((p) => p ?? place(e.currentTarget, false))}
+      onMouseEnter={(e) => { if (!open) openFrom(e.currentTarget, false); }}
       onMouseLeave={() => setPos((p) => (p?.pinned ? p : null))}
     >
       <button
         type="button"
         aria-label="도움말"
-        onClick={(e) => setPos((p) => (p?.pinned ? null : place(e.currentTarget.parentElement, true)))}
+        onClick={(e) => {
+          if (pos?.pinned) setPos(null);
+          else openFrom(e.currentTarget.parentElement, true);
+        }}
         onBlur={() => setPos(null)}
         className={`inline-flex cursor-help rounded-sm focus:outline-none focus:ring-1 ${theme.accentRing}`}
       >
-        <Info className={`w-3 h-3 ${pos ? theme.accentText : theme.textGhost}`} />
+        <Info className={`w-3 h-3 ${open ? theme.accentText : theme.textGhost}`} />
       </button>
-      {pos && (
+      {open && (
         <span
           role="tooltip"
-          className={`fixed z-50 -translate-x-1/2 rounded-lg border px-3 py-2 text-[11px] leading-relaxed shadow-xl
-            ${theme.panelBorder} ${theme.headerBg} ${theme.textSecondary}`}
-          style={{ left: pos.x, top: pos.y, width: TOOLTIP_W }}
+          /* 패널과 확실히 구분되는 반전(다크) 말풍선 — 라이트/다크 테마 어디서나 대비가 선다.
+             z-[90]: 사이드바(z-20)·모달(z-50) 위, 튜토리얼 오버레이(z-100) 아래 */
+          className="fixed z-[90] -translate-x-1/2 rounded-lg border border-slate-600/50 bg-slate-900/95
+            px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-xl shadow-black/30 backdrop-blur-sm"
+          style={{ left: pos.x, top: pos.top, bottom: pos.bottom, width: TOOLTIP_W }}
         >
           {hint}
         </span>
@@ -74,7 +103,8 @@ export const StatusLamp = ({ state, size = 'sm', showLabel = true }) => {
   const s = STATUS[state] ?? STATUS.IDLE;
   const dot = size === 'lg' ? 'w-3.5 h-3.5' : 'w-2 h-2';
   return (
-    <span className="inline-flex items-center gap-1.5">
+    /* shrink-0·nowrap — 옆의 긴 텍스트에 밀려 "작업\n중"으로 줄바꿈되지 않게 */
+    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
       <span className={`relative flex ${dot}`}>
         {s.pulse && <span className={`absolute inline-flex w-full h-full rounded-full opacity-60 animate-ping ${s.dot}`} />}
         <span className={`relative inline-flex w-full h-full rounded-full ring-2 ${s.ring} ${s.dot}`} />
