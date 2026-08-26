@@ -38,6 +38,7 @@ import {
   currentLoadAt,
   findAsset,
 } from './data/factoryAssets.js';
+import { findLineAsset, lineSelectableAssets, memoKeyOf } from './data/lineAssets.js';
 import {
   INITIAL_JOBS_BY_LINE,
   INITIAL_OFFSETS_BY_LINE,
@@ -75,13 +76,37 @@ import TutorialOverlay from './components/TutorialOverlay.jsx';
 /* 라인 목록은 3D 배치와 같은 소스를 쓴다 — factoryAssets.PRODUCTION_LINES */
 const PLANTS = PRODUCTION_LINES;
 
-/* 저장된 메모의 작성 시각(ISO 문자열)을 Date 로 되살린다 */
-const reviveMemos = (stored) =>
+/**
+ * 저장된 메모의 작성 시각(ISO 문자열)을 Date 로 되살린다.
+ *  키는 `라인:설비` (memoKeyOf) — 설비 마스터가 라인 공용이던 시절의 구키(설비 ID만)는
+ *  1호기 기록으로 옮긴다 (당시 화면이 사실상 1호기 값을 보여주고 있었다).
+ */
+const reviveMemos = (stored) => {
+  const out = {};
+  for (const [key, list] of Object.entries(stored ?? {})) {
+    const k = key.includes(':') ? key : memoKeyOf(PRODUCTION_LINES[0].id, key);
+    const revived = (list ?? []).map((m) => ({ ...m, at: new Date(m.at) }));
+    out[k] = out[k] ? [...out[k], ...revived].sort((a, b) => b.at - a.at) : revived;
+  }
+  return out;
+};
+
+/**
+ * 대기열 불변식 — 선두는 생산 중(RUNNING), 나머지는 대기(IDLE).
+ *  엔진은 선두 '위치'만 보고 시간을 진행시키므로, state 는 표시용이다.
+ *  참조는 값이 실제로 바뀌는 로트만 갈아끼운다 (불필요한 리렌더 방지).
+ */
+const normalizeQueue = (queue) =>
+  queue.map((j, i) =>
+    i === 0
+      ? (j.state === 'RUNNING' ? j : { ...j, state: 'RUNNING' })
+      : (j.state === 'RUNNING' ? { ...j, state: 'IDLE' } : j)
+  );
+
+/* 저장된 대기열도 같은 불변식으로 되살린다 — 구버전 저장분(선두 IDLE)을 바로잡는다 */
+const reviveJobsByLine = (stored) =>
   Object.fromEntries(
-    Object.entries(stored ?? {}).map(([assetId, list]) => [
-      assetId,
-      (list ?? []).map((m) => ({ ...m, at: new Date(m.at) })),
-    ])
+    Object.entries(stored ?? {}).map(([lineId, queue]) => [lineId, normalizeQueue(queue ?? [])])
   );
 
 export default function DigitalTwinDashboard() {
@@ -93,7 +118,7 @@ export default function DigitalTwinDashboard() {
   const [plant, setPlant] = useState(PLANTS[0].id);
   /* 대기열(로트)은 라인별로 완전히 분리된다. 품목 카탈로그(products)만 라인 공용이다.
      대기열·카탈로그·배치·메모·이력은 localStorage 에 저장되어 새로고침에도 유지된다. */
-  const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE);
+  const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE, reviveJobsByLine);
   const [products, setProducts] = usePersistentState('products', INITIAL_PRODUCT_CATALOG);
   const [speed, setSpeed] = useState(1);
   const [selectedId, setSelectedId] = useState(null);
@@ -133,7 +158,7 @@ export default function DigitalTwinDashboard() {
     if (session) setTutorialOpen(true);
   }, [session]);
 
-  /* 라인별 설비 배치 오프셋 / 설비별 메모(라인 공용 — 설비 마스터가 공용이라) */
+  /* 라인별 설비 배치 오프셋 / 설비 메모 — 메모는 호기(라인×설비) 단위로 붙는다 */
   const [offsetsByLine, setOffsetsByLine] = usePersistentState('offsetsByLine', INITIAL_OFFSETS_BY_LINE);
   const [memos, setMemos] = usePersistentState('memos', {}, reviveMemos);
 
@@ -175,7 +200,9 @@ export default function DigitalTwinDashboard() {
   const jobs = jobsByLine[plant] ?? [];
   const offsets = offsetsByLine[plant] ?? {};
   const currentJob = jobs[0] ?? null;
-  const selectedAsset = useMemo(() => findAsset(selectedId), [selectedId]);
+  /* 상세 패널이 보는 것은 형식 마스터가 아니라 '이 라인의 호기' — 시리얼·이력이 라인마다 다르다 */
+  const selectedAsset = useMemo(() => findLineAsset(plant, selectedId), [plant, selectedId]);
+  const lineAssets = useMemo(() => lineSelectableAssets(plant), [plant]);
   const plantName = PLANTS.find((p) => p.id === plant)?.name ?? '';
 
   /* 화면 곳곳(GNB 버튼·프레임·모달)이 보는 것은 '지금 선택된 라인'의 정지 여부 */
@@ -192,8 +219,7 @@ export default function DigitalTwinDashboard() {
     (lineId, job, { actualSec, defects }) => {
       setJobsByLine((prev) => {
         const queue = prev[lineId] ?? [];
-        const rest = queue.slice(1).map((j, i) => (i === 0 ? { ...j, state: 'RUNNING' } : j));
-        return { ...prev, [lineId]: rest };
+        return { ...prev, [lineId]: normalizeQueue(queue.slice(1)) };
       });
       const record = {
         id: `PR-${Date.now()}-${lineId}`,
@@ -435,19 +461,19 @@ export default function DigitalTwinDashboard() {
       [plant]: { ...prev[plant], [id]: [...(findAsset(id)?.offset ?? [0, 0, 0])] },
     }));
 
-  /** 선택된 라인의 대기열만 갈아끼운다 — 다른 라인은 건드리지 않는다 */
+  /** 선택된 라인의 대기열만 갈아끼운다 — 다른 라인은 건드리지 않는다.
+   *  엔진은 대기열 '선두 위치'만 보고 시간을 진행시키므로, 표시 상태가 실제와
+   *  어긋나지 않게 갱신 때마다 선두=RUNNING·나머지=IDLE 불변식을 강제한다.
+   *  (빈 대기열에 로트를 추가하면 선두가 IDLE 로 남아 '대기'로 보이던 버그) */
   const updateLineJobs = (updater) =>
-    setJobsByLine((prev) => ({ ...prev, [plant]: updater(prev[plant] ?? []) }));
+    setJobsByLine((prev) => ({ ...prev, [plant]: normalizeQueue(updater(prev[plant] ?? [])) }));
 
   /* 확인 팝업에서 '작업 취소'를 누른 뒤에만 실제로 제거된다 */
   const handleCancelJob = (id) => {
     const cancelled = jobs.find((j) => j.id === id);
     const wasHead = currentJob?.id === id;
-    updateLineJobs((prev) => {
-      const rest = prev.filter((j) => j.id !== id);
-      /* 선두를 취소했으면 다음 작업이 곧바로 올라온다 — 진행 시간도 0 부터 */
-      return wasHead ? rest.map((j, i) => (i === 0 ? { ...j, state: 'RUNNING' } : j)) : rest;
-    });
+    /* 선두를 취소했으면 다음 작업이 곧바로 올라온다 (updateLineJobs 가 RUNNING 으로 승격) */
+    updateLineJobs((prev) => prev.filter((j) => j.id !== id));
     if (wasHead) resetElapsed(plant);
     setSelectedJobId((cur) => (cur === id ? null : cur));
     setJobCancelTarget(null);
@@ -464,13 +490,8 @@ export default function DigitalTwinDashboard() {
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
     const headChanged = next[0]?.id !== queue[0]?.id;
-    /* 새 선두는 생산 중으로, 밀려난 이전 선두는 대기로 정리한다 */
-    const normalized = next.map((j, i) =>
-      i === 0
-        ? (j.state === 'RUNNING' ? j : { ...j, state: 'RUNNING' })
-        : (j.state === 'RUNNING' ? { ...j, state: 'IDLE' } : j)
-    );
-    updateLineJobs(() => normalized);
+    /* 새 선두 RUNNING·밀려난 선두 IDLE 정리는 updateLineJobs 의 불변식이 처리한다 */
+    updateLineJobs(() => next);
     if (headChanged) resetElapsed(plant);
     logEvent('JOB_REORDERED', `${moved.name} 순서 변경 (${from + 1}번 → ${to + 1}번)`, { lineId: plant });
   };
@@ -538,11 +559,15 @@ export default function DigitalTwinDashboard() {
 
   const handleAddMemo = (assetId, text) => {
     const memo = { id: Date.now(), at: new Date(), text, author: session?.name };
+    const key = memoKeyOf(plant, assetId); // 메모는 지금 보고 있는 라인의 호기에 붙는다
     setMemos((prev) => ({
       ...prev,
-      [assetId]: [memo, ...(prev[assetId] ?? [])],
+      [key]: [memo, ...(prev[key] ?? [])],
     }));
-    logEvent('MEMO_ADDED', `${findAsset(assetId)?.name ?? assetId} 메모 작성`, { assetId });
+    logEvent('MEMO_ADDED', `${plantName} ${findAsset(assetId)?.name ?? assetId} 메모 작성`, {
+      lineId: plant,
+      assetId,
+    });
   };
 
   /** 엑셀에서 선택된 행들을 '선택된 라인' 로트로 추가하고, 미등록 품목은 카탈로그에 등록한다 */
@@ -641,6 +666,7 @@ export default function DigitalTwinDashboard() {
           animTimeScale={animTimeScale}
           eStopEngaged={eStopEngaged}
           cylinder={cylinder}
+          lineAssets={lineAssets}
           canManageJobs={can('jobs.manage')}
           manageHint={PERMISSION_HINTS['jobs.manage']}
         />
@@ -678,7 +704,8 @@ export default function DigitalTwinDashboard() {
           lineStopped={eStopEngaged}
           onClose={() => setSelectedId(null)}
           now={now}
-          memos={memos[selectedId] ?? []}
+          lineName={plantName}
+          memos={memos[memoKeyOf(plant, selectedId)] ?? []}
           onAddMemo={handleAddMemo}
           memoAuthor={session.name}
           canWriteMemo={can('memo.write')}
@@ -747,7 +774,7 @@ export default function DigitalTwinDashboard() {
           theme={theme}
           alarm={alarm}
           lineName={PLANTS.find((p) => p.id === alarm.lineId)?.name ?? alarm.lineId}
-          asset={findAsset(alarm.assetId)}
+          asset={findLineAsset(alarm.lineId, alarm.assetId)}
           onGoTo={handleGoToFault}
         />
       )}

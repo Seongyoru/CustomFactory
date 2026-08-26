@@ -143,12 +143,13 @@ export const bottleneckSensitivity = (lots, improve = 0.1, headElapsedSec = 0) =
  *  따라서 비교 대상은 남은 계획(전체 − 선두 완료분)이고, 소진 시각은 큐 시작이 아니라
  *  (완료분 + remainingEa)번째 EA 에서 현재 경과를 뺀 '지금부터 남은 초'로 돌려준다.
  *  위험한 것부터 정렬한다.
+ *  assets — 라인별 설비 인스턴스(소모품 잔량이 호기마다 다르다). 생략 시 형식 마스터.
  */
-export const consumableOutlook = (lots, headElapsedSec = 0) => {
+export const consumableOutlook = (lots, headElapsedSec = 0, assets = SELECTABLE_ASSETS) => {
   const head = lots[0];
   const headDoneEa = head ? completedEaAt(headElapsedSec, head.qty, head.taktSec) : 0;
   const neededEa = Math.max(0, lots.reduce((s, l) => s + l.qty, 0) - headDoneEa);
-  return SELECTABLE_ASSETS.filter((a) => a.consumable)
+  return assets.filter((a) => a.consumable)
     .map((a) => {
       const wear = CONSUMABLE_WEAR_PER_EA[a.id] ?? 0.01;
       const remainingEa = Math.floor(a.consumable.percent / wear);
@@ -259,6 +260,7 @@ export function simulateLine({
   chunkSize = 250,
   onProgress,
   isCancelled = () => false,
+  assets = SELECTABLE_ASSETS, // 라인별 설비 인스턴스 — 소모품 리스크가 호기 잔량을 본다
 }) {
   const t0 = performance.now();
   const A = SIM_ASSUMPTIONS;
@@ -355,7 +357,7 @@ export function simulateLine({
           max: Math.max(...defectsPerRun),
         },
         sensitivity: bottleneckSensitivity(lots, 0.1, headElapsedSec),
-        consumables: consumableOutlook(lots, headElapsedSec),
+        consumables: consumableOutlook(lots, headElapsedSec, assets),
         timeline,
         totalsWallSorted: totals.map(wall), // 납기 달성 확률 계산용 (정렬 유지)
         orderSuggestion: orderSuggestion(lots),

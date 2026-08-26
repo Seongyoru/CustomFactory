@@ -115,7 +115,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
 
 const AssetDetailSidebar = ({
   theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo,
-  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, telemetry, lineTaktSec = 2.53,
+  memoAuthor = '-', canWriteMemo = true, memoHint, lineId, lineName, telemetry, lineTaktSec = 2.53,
   cylinder,
 }) => {
   const [memoDraft, setMemoDraft] = useState('');
@@ -159,7 +159,10 @@ const AssetDetailSidebar = ({
         <header className={`shrink-0 px-4 py-3 border-b ${theme.panelBorder} ${theme.accentBgSoft}`}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className={`text-[10px] font-semibold tracking-widest ${theme.accentText}`}>EQUIPMENT DETAIL</p>
+              {/* 어느 호기의 상세인지 — 시리얼·이력·메모가 전부 라인 인스턴스 값이다 */}
+              <p className={`text-[10px] font-semibold tracking-widest ${theme.accentText}`}>
+                EQUIPMENT DETAIL{lineName ? ` · ${lineName}` : ''}
+              </p>
               <h2 className={`mt-1 text-[17px] font-bold truncate ${theme.textPrimary}`}>{asset?.name ?? '-'}</h2>
               <p className={`text-[11px] tabular-nums mt-0.5 ${theme.textMuted}`}>{asset?.sn} / {asset?.mfgDate}</p>
               <p className={`text-[11px] mt-0.5 ${theme.textFaint}`}>{asset?.maker}</p>
@@ -314,6 +317,7 @@ const AssetDetailSidebar = ({
               icon={StickyNote}
               title="작업자 메모"
               theme={theme}
+              hint={`메모는 ${lineName ?? '이 라인'}의 이 설비(호기)에만 기록됩니다. 다른 라인의 같은 설비와 공유되지 않습니다.`}
               right={<span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{memos.length}건</span>}
             />
             <div className="p-3 space-y-2">

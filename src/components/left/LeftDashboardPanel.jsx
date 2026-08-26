@@ -45,7 +45,7 @@ const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
   selectedJobId, onSelectJob, onReorderJobs, onApplyOrder, onSaveSnapshot,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
-  todayQty = 0, cylinder,
+  todayQty = 0, cylinder, lineAssets,
   canManageJobs = true, manageHint,
 }) => {
   /* 저장된 결과 표시 — 같은 결과를 두 번 저장하지 않게 앵커로 구분 */
@@ -98,6 +98,8 @@ const LeftDashboardPanel = ({
       carryFill: cylinder?.fill ?? 0, // 실린더 이월 채움 — 반출 수가 게이지와 일치하게
       speed: simSpeed,
       runs: RUNS,
+      assets: lineAssets, // 이 라인의 설비 인스턴스 — 소모품 리스크가 호기별로 다르다
+
       onProgress: (done) => {
         control.realDone = done;
       },

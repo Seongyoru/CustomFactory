@@ -14,17 +14,57 @@ export const Panel = ({ theme, className = '', children, ...rest }) => (
   </section>
 );
 
+/**
+ * 도움말 ⓘ — 올리면 즉시, 클릭하면 고정 토글로 뜨는 툴팁.
+ *  브라우저 기본 title 툴팁은 1초쯤 지나야 뜨고 클릭에는 반응하지 않아
+ *  "눌러도 아무 일 없다"로 읽혔다. 패널들이 스크롤 컨테이너 안에 있어
+ *  말풍선은 fixed 로 띄우고 화면 가장자리에서는 안쪽으로 밀어 넣는다.
+ */
+const TOOLTIP_W = 264;
+export const HintTip = ({ hint, theme }) => {
+  const [pos, setPos] = useState(null); // null=닫힘, {x, y, pinned}
+  const place = (el, pinned) => {
+    const r = el.getBoundingClientRect();
+    const half = TOOLTIP_W / 2;
+    const x = Math.min(Math.max(r.left + r.width / 2, half + 8), window.innerWidth - half - 8);
+    return { x, y: r.bottom + 6, pinned };
+  };
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={(e) => setPos((p) => p ?? place(e.currentTarget, false))}
+      onMouseLeave={() => setPos((p) => (p?.pinned ? p : null))}
+    >
+      <button
+        type="button"
+        aria-label="도움말"
+        onClick={(e) => setPos((p) => (p?.pinned ? null : place(e.currentTarget.parentElement, true)))}
+        onBlur={() => setPos(null)}
+        className={`inline-flex cursor-help rounded-sm focus:outline-none focus:ring-1 ${theme.accentRing}`}
+      >
+        <Info className={`w-3 h-3 ${pos ? theme.accentText : theme.textGhost}`} />
+      </button>
+      {pos && (
+        <span
+          role="tooltip"
+          className={`fixed z-50 -translate-x-1/2 rounded-lg border px-3 py-2 text-[11px] leading-relaxed shadow-xl
+            ${theme.panelBorder} ${theme.headerBg} ${theme.textSecondary}`}
+          style={{ left: pos.x, top: pos.y, width: TOOLTIP_W }}
+        >
+          {hint}
+        </span>
+      )}
+    </span>
+  );
+};
+
 export const PanelTitle = ({ icon: Icon, title, right, theme, hint }) => (
   <header className={`flex items-center justify-between px-3 py-2.5 border-b ${theme.divider}`}>
     <div className="flex items-center gap-2">
       <Icon className={`w-4 h-4 ${theme.accentText}`} />
       <h2 className={`text-[13px] font-semibold tracking-tight ${theme.textPrimary}`}>{title}</h2>
-      {/* 패널이 뭘 보여주는지 짧게 설명하는 도움말 — 아이콘에 올리면 뜬다 */}
-      {hint && (
-        <span title={hint} className="cursor-help inline-flex" aria-label={hint}>
-          <Info className={`w-3 h-3 ${theme.textGhost}`} />
-        </span>
-      )}
+      {/* 패널이 뭘 보여주는지 짧게 설명하는 도움말 — 올리거나 눌러서 본다 */}
+      {hint && <HintTip hint={hint} theme={theme} />}
     </div>
     {right}
   </header>
