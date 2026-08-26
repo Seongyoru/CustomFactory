@@ -7,7 +7,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Settings2, Trash2, Upload, X,
 } from 'lucide-react';
-import { completedEaAt } from '../../data/factoryAssets.js';
+import { completedEaAt, findAsset } from '../../data/factoryAssets.js';
+import { SIM_ASSUMPTIONS, simulateLine } from '../../lib/lineSimulation.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
@@ -68,47 +69,53 @@ const LeftDashboardPanel = ({
   }, [currentJob, elapsed, speed, now]);
 
   /**
-   * 라인 시뮬레이션 — 대기열 전체를 현재 배속으로 돌렸을 때의 완료 예측.
-   *  실제 라인 상태는 건드리지 않는 예측 도구다. 몇 초 진행 후 결과 카드가 나온다.
+   * 라인 몬테카를로 시뮬레이션 — 결정식(표준시간 합)으로는 못 구하는 것들을 뽑는다:
+   *  완료 시각의 확률 분포, 병목 개선 민감도, 소모품 소진 리스크, 자재 계획.
+   *  진행바는 연출이 아니라 '실제 반복 횟수'다 (결과에 계산 시간도 표기).
    */
-  const [lineSim, setLineSim] = useState(null); // null | {progress} | {done, result}
-  const lineSimTimer = useRef(null);
+  const [lineSim, setLineSim] = useState(null); // null | {progress:{done,total}} | {done, result}
+  const simCancelRef = useRef(null);
   const startLineSim = () => {
-    clearInterval(lineSimTimer.current);
-    const DURATION_MS = 3000;
-    const t0 = Date.now();
-    const lots = jobs.length;
-    const totalQty = jobs.reduce((s, j) => s + j.qty, 0);
-    const standardSec = jobs.reduce((s, j) => s + j.totalSec, 0);
-    const remainSec = Math.max(0, standardSec - elapsed);
-    const speedNow = simSpeed;
-    setLineSim({ progress: 0 });
-    lineSimTimer.current = setInterval(() => {
-      const k = Math.min(1, (Date.now() - t0) / DURATION_MS);
-      if (k >= 1) {
-        clearInterval(lineSimTimer.current);
-        setLineSim({
-          done: true,
-          result: {
-            lots,
-            totalQty,
-            defects: Math.round(totalQty * Math.random() * 0.015),
-            standardSec,
-            wallSec: remainSec / speedNow,
-            finishAt: new Date(Date.now() + (remainSec / speedNow) * 1000),
-            speed: speedNow,
-          },
-        });
-      } else {
-        setLineSim({ progress: k });
-      }
-    }, 80);
+    if (simCancelRef.current) simCancelRef.current.cancelled = true;
+    const control = { cancelled: false };
+    simCancelRef.current = control;
+    const RUNS = 2000;
+    setLineSim({ progress: { done: 0, total: RUNS } });
+    simulateLine({
+      lots: jobs,
+      headElapsedSec: elapsed,
+      carryFill: cylinder?.fill ?? 0, // 실린더 이월 채움 — 반출 수가 게이지와 일치하게
+      speed: simSpeed,
+      runs: RUNS,
+      onProgress: (done, total) => {
+        if (!control.cancelled) setLineSim({ progress: { done, total } });
+      },
+      isCancelled: () => control.cancelled,
+    }).then((result) => {
+      if (control.cancelled || !result) return;
+      /* 모든 '시각'은 결과 확정 시점의 벽시계에 고정한다 — 라이브 값과 섞으면
+         배속 변경·로트 전환 때 표시가 표류하거나 점프한다 */
+      const now = Date.now();
+      setLineSim({
+        done: true,
+        result: {
+          ...result,
+          finishAtP50: new Date(now + result.finishWallSec.p50 * 1000),
+          finishAtP90: new Date(now + result.finishWallSec.p90 * 1000),
+          consumables: result.consumables.map((c) =>
+            c.ok ? c : { ...c, replaceAt: new Date(now + (c.runOutSec / result.speed) * 1000) }
+          ),
+        },
+      });
+    });
   };
   const stopLineSim = () => {
-    clearInterval(lineSimTimer.current);
+    if (simCancelRef.current) simCancelRef.current.cancelled = true;
     setLineSim(null);
   };
-  useEffect(() => () => clearInterval(lineSimTimer.current), []);
+  useEffect(() => () => {
+    if (simCancelRef.current) simCancelRef.current.cancelled = true;
+  }, []);
 
   return (
     <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
@@ -365,63 +372,128 @@ const LeftDashboardPanel = ({
         </div>
       </Panel>
 
-      {/* 라인 시뮬레이션 ------------------------------------------ */}
+      {/* 라인 시뮬레이션 (몬테카를로) ------------------------------ */}
       <Panel theme={theme} data-tour="line-sim" className={mode === 'simulation' ? theme.glow : ''}>
         <PanelTitle
           icon={Activity}
           title="라인 시뮬레이션"
           theme={theme}
-          hint="대기열의 모든 로트를 현재 배속으로 돌렸을 때의 완료 시각·생산량·예상 불량을 미리 계산합니다. 실제 라인 상태에는 영향이 없습니다."
+          hint="대기열 전체를 확률 모델(사이클 편차·돌발 정지)로 수천 번 돌려 완료 시각의 분포, 병목 개선 효과, 소모품 소진 리스크를 예측합니다. 실제 라인 상태에는 영향이 없습니다."
           right={
             <span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>
-              {mode === 'simulation' ? 'READY' : 'LIVE 잠금'}
+              {mode === 'simulation' ? 'MONTE CARLO' : 'LIVE 잠금'}
             </span>
           }
         />
         <div className="p-3 space-y-2.5">
           <p className={`text-[10px] tabular-nums ${theme.textFaint}`}>
             대기열 로트 {jobs.length}건 · 총 {jobs.reduce((s, j) => s + j.qty, 0)} EA · 표준{' '}
-            {fmtKoDuration(jobs.reduce((s, j) => s + j.totalSec, 0))}
+            {fmtKoDuration(Math.max(0, jobs.reduce((s, j) => s + j.totalSec, 0) - elapsed))} 남음
           </p>
 
           {lineSim && !lineSim.done && (
             <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
               <div className="flex items-center justify-between text-[11px]">
-                <span className={theme.textMuted}>가상 실행 중…</span>
+                <span className={theme.textMuted}>시뮬레이션 실행 중</span>
                 <span className={`font-bold tabular-nums ${theme.accentText}`}>
-                  {Math.round(lineSim.progress * 100)}%
+                  {lineSim.progress.done.toLocaleString()} / {lineSim.progress.total.toLocaleString()}회
                 </span>
               </div>
               <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
                 <div
                   className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
-                  style={{ width: `${lineSim.progress * 100}%` }}
+                  style={{ width: `${(lineSim.progress.done / lineSim.progress.total) * 100}%` }}
                 />
               </div>
             </div>
           )}
 
-          {lineSim?.done && (
-            <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
-              <p className={`text-[11px] font-bold ${theme.accentText}`}>가상 실행 결과 (예측)</p>
-              <dl className="mt-1.5 grid grid-cols-3 gap-1.5 text-center">
-                {[
-                  ['총 생산량', `${lineSim.result.totalQty} EA`],
-                  ['예상 불량', `${lineSim.result.defects} EA`],
-                  ['완료 예정', fmtClock(lineSim.result.finishAt, false)],
-                ].map(([k, v]) => (
-                  <div key={k}>
-                    <dt className={`text-[10px] ${theme.textFaint}`}>{k}</dt>
-                    <dd className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</dd>
+          {lineSim?.done && (() => {
+            const r = lineSim.result;
+            const risky = r.consumables.filter((c) => !c.ok);
+            const maxBin = Math.max(1, ...r.histogram.bins);
+            const sens = r.sensitivity;
+            return (
+              <div className="space-y-2">
+                {/* 완료 시각 — 중앙값 + 90% 신뢰 상한 */}
+                <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
+                  <div className="flex items-baseline justify-between">
+                    <span className={`text-[10px] ${theme.textFaint}`}>완료 예정 (중앙값)</span>
+                    <span className={`text-[10px] tabular-nums ${theme.textMuted}`}>
+                      90% 확률 {fmtClock(r.finishAtP90, false)} 이전
+                    </span>
                   </div>
-                ))}
-              </dl>
-              <p className={`mt-1.5 text-[10px] tabular-nums ${theme.textGhost}`}>
-                로트 {lineSim.result.lots}건 · 표준 {fmtKoDuration(lineSim.result.standardSec)} ·
-                ×{fmtSpeed(lineSim.result.speed)} 배속 기준 약 {fmtKoDuration(lineSim.result.wallSec)} 소요
-              </p>
-            </div>
-          )}
+                  <p className={`mt-0.5 text-[20px] font-bold tabular-nums leading-none ${theme.accentText}`}>
+                    {fmtClock(r.finishAtP50, false)}
+                  </p>
+
+                  {/* 완료 시간 분포 히스토그램 — 2,000회의 흩어짐 */}
+                  <div className="mt-2 flex items-end gap-[1px] h-9" aria-label="완료 시간 분포">
+                    {r.histogram.bins.map((b, i) => (
+                      <span
+                        key={i}
+                        className="flex-1 rounded-t-[2px]"
+                        style={{
+                          height: `${Math.max(4, (b / maxBin) * 100)}%`,
+                          backgroundColor: theme.accentHex,
+                          opacity: b === 0 ? 0.12 : 0.35 + 0.65 * (b / maxBin),
+                        }}
+                        title={`${b}회`}
+                      />
+                    ))}
+                  </div>
+                  <div className={`mt-0.5 flex justify-between text-[9px] tabular-nums ${theme.textGhost}`}>
+                    <span>{fmtKoDuration(r.histogram.minSec)}</span>
+                    <span>소요 분포</span>
+                    <span>{fmtKoDuration(r.histogram.maxSec)}</span>
+                  </div>
+                </div>
+
+                {/* 산출 요약 */}
+                <div className={`grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
+                  {[
+                    ['생산', `${r.summary.totalQty} EA`],
+                    ['예상 불량', `~${r.defects.mean} EA`],
+                    ['반출 실린더', `${r.summary.cylinders}개`],
+                  ].map(([k, v]) => (
+                    <div key={k}>
+                      <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
+                      <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 병목 개선 민감도 — what-if */}
+                <p className={`text-[10px] leading-relaxed tabular-nums ${theme.textMuted}`}>
+                  병목 <b className={theme.textSecondary}>{findAsset(sens.bottleneckId)?.nameKo}</b>{' '}
+                  {Math.round(sens.improve * 100)}% 개선 시{' '}
+                  <b className={theme.accentText}>−{fmtKoDuration(sens.savedSec / r.speed)}</b>
+                  {sens.newBottleneckId && (
+                    <> · 새 병목: {findAsset(sens.newBottleneckId)?.nameKo}</>
+                  )}
+                </p>
+
+                {/* 소모품 리스크 */}
+                {risky.length > 0 ? (
+                  risky.map((c) => (
+                    <p key={c.assetId} className="text-[10px] leading-relaxed tabular-nums text-red-500">
+                      ⚠ {findAsset(c.assetId)?.nameKo} {c.label} {c.percent}% — 약 {c.remainingEa} EA 후
+                      소진 (잔여 계획 {c.neededEa} EA), {fmtClock(c.replaceAt, false)}경 교체 필요
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-[10px] leading-relaxed text-emerald-500">
+                    ✓ 소모품 전 항목 잔여 계획 완주 가능
+                  </p>
+                )}
+
+                <p className={`text-[9px] tabular-nums ${theme.textGhost}`}>
+                  몬테카를로 {r.runs.toLocaleString()}회 · {r.tookMs}ms · 사이클 편차 ±3% ·
+                  돌발 정지 {SIM_ASSUMPTIONS.microStopProbPerEa * 100}%/EA · ×{fmtSpeed(r.speed)} 배속 기준
+                </p>
+              </div>
+            );
+          })()}
 
           <div className="grid grid-cols-2 gap-2">
             <button
