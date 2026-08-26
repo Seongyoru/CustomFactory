@@ -55,6 +55,8 @@ import { EVENT_LOG_LIMIT, makeEvent } from './lib/events.js';
 import { useWallClock } from './hooks/useWallClock.js';
 import { useProductionEngine } from './hooks/useProductionEngine.js';
 import { useTelemetry } from './hooks/useTelemetry.js';
+import { useMaintenance } from './hooks/useMaintenance.js';
+import { consumableAlarmOf, withLiveConsumable, withMaintHistory } from './lib/maintenance.js';
 
 import TopGnb from './components/gnb/TopGnb.jsx';
 import LeftDashboardPanel from './components/left/LeftDashboardPanel.jsx';
@@ -200,9 +202,10 @@ export default function DigitalTwinDashboard() {
   const jobs = jobsByLine[plant] ?? [];
   const offsets = offsetsByLine[plant] ?? {};
   const currentJob = jobs[0] ?? null;
-  /* 상세 패널이 보는 것은 형식 마스터가 아니라 '이 라인의 호기' — 시리얼·이력이 라인마다 다르다 */
-  const selectedAsset = useMemo(() => findLineAsset(plant, selectedId), [plant, selectedId]);
-  const lineAssets = useMemo(() => lineSelectableAssets(plant), [plant]);
+  /* 상세 패널이 보는 것은 형식 마스터가 아니라 '이 라인의 호기' — 시리얼·이력이 라인마다 다르다.
+     (라이브 소모품 잔량·교체 이력 병합은 아래 useMaintenance 뒤에서 얹는다) */
+  const selectedAssetBase = useMemo(() => findLineAsset(plant, selectedId), [plant, selectedId]);
+  const lineAssetsBase = useMemo(() => lineSelectableAssets(plant), [plant]);
   const plantName = PLANTS.find((p) => p.id === plant)?.name ?? '';
 
   /* 화면 곳곳(GNB 버튼·프레임·모달)이 보는 것은 '지금 선택된 라인'의 정지 여부 */
@@ -380,6 +383,57 @@ export default function DigitalTwinDashboard() {
     alarm && alarm.lineId === plant && alarm.assetId === selectedId ? alarm : null;
 
   /**
+   * 설비 보전 — 라인이 처리한 EA 만큼 소모품이 실제로 닳는다.
+   *  누적 처리 EA = 완료 실적(production 합) + 진행 중 선두 로트의 완료분.
+   *  완료 실적은 lineStats.produced(5초 지연 플러시)가 아니라 production 을 쓴다 —
+   *  완료 콜백에서 대기열 전진·실적 기록·경과 리셋이 같은 커밋에 반영되므로
+   *  누적치가 "떨어졌다 점프"하지 않고 연속이다. (지연 플러시를 쓰면 점프분에
+   *  마모가 한 번 더 걸리는 이중 마모가 생긴다)
+   */
+  const totalEaKey = PLANTS.map((l) => {
+    const head = jobsByLine[l.id]?.[0] ?? null;
+    const done = head ? completedEaAt(elapsedByLine[l.id] ?? 0, head.qty, taktOf(head)) : 0;
+    const completed = production.reduce((s, p) => (p.lineId === l.id ? s + p.qty : s), 0);
+    return `${l.id}:${completed + done}`;
+  }).join(',');
+
+  /* 임계 하향 통과: 15% → 경고 이벤트, 5% → 설비 알람 (기존 오류 알람 플로우 재사용) */
+  const handleConsumableCrossing = useCallback(
+    (lineId, crossing) => {
+      const asset = findLineAsset(lineId, crossing.assetId);
+      if (!asset?.consumable) return;
+      if (crossing.kind === 'crit') {
+        handleGatewayAlarm({ lineId, ...consumableAlarmOf(asset, crossing.percent) });
+      } else {
+        logEvent(
+          'CONSUMABLE_LOW',
+          `${asset.nameKo} ${asset.consumable.label} ${Math.round(crossing.percent)}% — 교체 준비 필요`,
+          { lineId, assetId: asset.id }
+        );
+      }
+    },
+    [handleGatewayAlarm, logEvent]
+  );
+
+  const { consumablePercents, maintLog, replaceConsumable } = useMaintenance({
+    totalEaKey,
+    onCrossing: handleConsumableCrossing,
+  });
+
+  /* 화면·시뮬레이션이 보는 설비 = 인스턴스 마스터 + 라이브 잔량(+교체 이력) */
+  const selectedAsset = useMemo(
+    () =>
+      selectedAssetBase
+        ? withMaintHistory(withLiveConsumable(selectedAssetBase, consumablePercents), maintLog)
+        : null,
+    [selectedAssetBase, consumablePercents, maintLog]
+  );
+  const lineAssets = useMemo(
+    () => lineAssetsBase.map((a) => withLiveConsumable(a, consumablePercents)),
+    [lineAssetsBase, consumablePercents]
+  );
+
+  /**
    * 오류 상황 테스트 — 무작위 라인 · 무작위 시나리오로 알람을 발생시킨다.
    * 이미 발생한 오류가 있으면 해제 버튼으로 동작한다.
    */
@@ -424,8 +478,10 @@ export default function DigitalTwinDashboard() {
     });
   };
 
-  /* 라인을 바꾸면 이전 라인을 가리키던 선택은 전부 버린다 (설비도 대기열 작업도) */
+  /* 라인을 바꾸면 이전 라인을 가리키던 선택은 전부 버린다 (설비도 대기열 작업도).
+     모르는 라인 ID 는 무시한다 — plant 가 ''/오타가 되면 메모·소모품이 유령 키에 쌓인다. */
   const handlePlantChange = (next) => {
+    if (!PLANTS.some((p) => p.id === next)) return;
     setPlant(next);
     setSelectedId(null);
     setSelectedJobId(null);
@@ -570,6 +626,30 @@ export default function DigitalTwinDashboard() {
     });
   };
 
+  /** 소모품 교체 — 잔량 100% 리셋 + 이력·감사 기록. 이 소모품의 알람(M-)도 함께 해제한다. */
+  const handleReplaceConsumable = (assetId) => {
+    const asset = findLineAsset(plant, assetId);
+    if (!asset?.consumable || !can('maintenance.perform')) return;
+    const rec = replaceConsumable(plant, asset, session?.name);
+    logEvent(
+      'MAINT_REPLACED',
+      `${plantName} ${asset.nameKo} ${rec.label} 교체 (잔량 ${Math.round(rec.percentBefore)}% → 100%)`,
+      { lineId: plant, assetId }
+    );
+    if (
+      alarm &&
+      alarm.lineId === plant &&
+      alarm.assetId === assetId &&
+      String(alarm.code).startsWith('M-')
+    ) {
+      logEvent('ALARM_CLEARED', `[${alarm.code}] ${alarm.title} 해제 (소모품 교체)`, {
+        lineId: plant,
+        assetId,
+      });
+      setAlarm(null);
+    }
+  };
+
   /** 엑셀에서 선택된 행들을 '선택된 라인' 로트로 추가하고, 미등록 품목은 카탈로그에 등록한다 */
   const handleImportExcel = (rows) => {
     logEvent('JOB_IMPORTED', `엑셀 업로드로 로트 ${rows.length}건 추가`, { lineId: plant });
@@ -710,6 +790,9 @@ export default function DigitalTwinDashboard() {
           memoAuthor={session.name}
           canWriteMemo={can('memo.write')}
           memoHint={PERMISSION_HINTS['memo.write']}
+          onReplaceConsumable={handleReplaceConsumable}
+          canMaintain={can('maintenance.perform')}
+          maintainHint={PERMISSION_HINTS['maintenance.perform']}
           lineId={plant}
           telemetry={telemetry}
           lineTaktSec={taktSec}
@@ -852,6 +935,8 @@ export default function DigitalTwinDashboard() {
           events={events}
           lineStats={lineStats}
           simSnapshots={simSnapshots}
+          consumablePercents={consumablePercents}
+          maintLog={maintLog}
           onDeleteSnapshot={handleDeleteSnapshot}
           canManageSnapshots={can('jobs.manage')}
           canExport={can('report.export')}

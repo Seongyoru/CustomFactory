@@ -13,9 +13,13 @@
  */
 import React, { useMemo, useState } from 'react';
 import {
-  Activity, AlertOctagon, BarChart3, FileDown, ListChecks, ScrollText, Siren, Trash2, X,
+  Activity, AlertOctagon, BarChart3, FileDown, ListChecks, ScrollText, Siren, Trash2, Wrench, X,
 } from 'lucide-react';
 import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
+import { lineSelectableAssets } from '../../data/lineAssets.js';
+import {
+  CONSUMABLE_WARN_PCT, consumablePercentOf, daysUntil, remainingEaOf,
+} from '../../lib/maintenance.js';
 import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
@@ -141,6 +145,7 @@ const OeeBar = ({ theme, label, value, strong = false }) => (
 const ReportModal = ({
   theme, production, events, lineStats, onClose, onResetData,
   simSnapshots = [], onDeleteSnapshot, canManageSnapshots = true,
+  consumablePercents = {}, maintLog = [],
   canExport = true, exportHint, canReset = true, resetHint,
 }) => {
   const [tab, setTab] = useState('production');
@@ -201,8 +206,35 @@ const ReportModal = ({
 
   const alarmEvents = events.filter((e) => e.type.startsWith('ALARM_') || e.type.startsWith('ESTOP_'));
 
+  /* 설비 보전 현황 — 전 라인 × 소모품 보유 설비. 잔량은 라이브 값, 점검일은 D-day 로 */
+  const maintRows = useMemo(
+    () =>
+      PRODUCTION_LINES.flatMap((l) =>
+        lineSelectableAssets(l.id)
+          .filter((a) => a.consumable)
+          .map((a) => {
+            const percent = Math.max(0, Math.round(consumablePercentOf(consumablePercents, l.id, a.id) ?? 0));
+            return {
+              lineId: l.id,
+              assetId: a.id,
+              name: a.nameKo,
+              sn: a.sn,
+              label: a.consumable.label,
+              percent,
+              remainEa: remainingEaOf(percent, a.id),
+              nextCheck: a.nextCheck,
+              dDay: daysUntil(a.nextCheck),
+            };
+          })
+      ),
+    [consumablePercents]
+  );
+  const riskyConsumables = maintRows.filter((r) => r.percent <= CONSUMABLE_WARN_PCT);
+  const dueChecks = maintRows.filter((r) => r.dDay != null && r.dDay <= 14);
+
   const tabs = [
     { key: 'production', label: '생산 리포트', icon: BarChart3 },
+    { key: 'maintenance', label: '설비 보전', icon: Wrench, count: riskyConsumables.length + dueChecks.length },
     { key: 'simulations', label: '시뮬레이션', icon: Activity, count: simSnapshots.length },
     { key: 'alarms', label: '알람 이력', icon: Siren, count: alarmEvents.length },
     { key: 'audit', label: '작업 로그', icon: ScrollText, count: events.length },
@@ -226,7 +258,7 @@ const ReportModal = ({
             type="button"
             disabled={!canExport}
             title={!canExport ? exportHint : undefined}
-            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots })}
+            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots, maintRows, maintLog })}
             className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-bold text-white ${theme.accentBg}
               hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
           >
@@ -342,6 +374,104 @@ const ReportModal = ({
                         <td className={`${td} tabular-nums font-semibold ${achieve != null && achieve < 0.9 ? 'text-amber-500' : theme.textSecondary}`}>
                           {achieve == null ? '—' : `${Math.round(achieve * 100)}%`}
                         </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </section>
+          </>
+        )}
+
+        {tab === 'maintenance' && (
+          <>
+            {/* 요약 칩 — 지금 조치가 필요한 것부터 */}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ['소모품 위험 (≤15%)', riskyConsumables.length, riskyConsumables.length > 0],
+                ['점검 임박 (D-14 이내)', dueChecks.length, dueChecks.length > 0],
+                ['소모품 교체 누적', maintLog.length, false],
+              ].map(([k, v, warn]) => (
+                <div key={k} className={`rounded-lg border px-3 py-2.5 ${warn ? 'border-red-500/40 bg-red-500/10' : `${theme.panelBorder} ${theme.subtleBg}`}`}>
+                  <p className={`text-[10px] ${warn ? 'text-red-500 font-semibold' : theme.textFaint}`}>{k}</p>
+                  <p className={`mt-1 text-[17px] font-bold tabular-nums ${warn ? 'text-red-500' : theme.textPrimary}`}>{v}건</p>
+                </div>
+              ))}
+            </div>
+
+            {/* 소모품·점검 현황 — 라인×설비 전체 */}
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+              <table className="w-full text-[11px]">
+                <thead className={theme.headerBg}>
+                  <tr className={`border-b ${theme.divider}`}>
+                    {['라인', '설비', '시리얼', '소모품', '잔량', '예상 잔여', '차기 점검'].map((h) => (
+                      <th key={h} className={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {maintRows.map((r) => (
+                    <tr key={`${r.lineId}:${r.assetId}`} className={`border-b last:border-0 ${theme.divider}`}>
+                      <td className={`${td} ${theme.textSecondary}`}>{lineName(r.lineId)}</td>
+                      <td className={`${td} ${theme.textPrimary}`}>{r.name}</td>
+                      <td className={`${td} tabular-nums ${theme.textFaint}`}>{r.sn}</td>
+                      <td className={`${td} ${theme.textSecondary}`}>{r.label}</td>
+                      <td className={`${td} w-40`}>
+                        <span className="flex items-center gap-2">
+                          <span className={`relative flex-1 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
+                            <span
+                              className={`absolute inset-y-0 left-0 rounded-full ${r.percent <= CONSUMABLE_WARN_PCT ? 'bg-red-500' : r.percent <= 40 ? 'bg-amber-400' : 'bg-emerald-500'}`}
+                              style={{ width: `${r.percent}%` }}
+                            />
+                          </span>
+                          <span className={`w-8 text-right tabular-nums font-semibold ${r.percent <= CONSUMABLE_WARN_PCT ? 'text-red-500' : theme.textSecondary}`}>
+                            {r.percent}%
+                          </span>
+                        </span>
+                      </td>
+                      <td className={`${td} tabular-nums ${r.percent <= CONSUMABLE_WARN_PCT ? 'text-red-500 font-semibold' : theme.textSecondary}`}>
+                        {r.remainEa} EA
+                      </td>
+                      <td className={`${td} tabular-nums`}>
+                        <span className={theme.textFaint}>{r.nextCheck}</span>{' '}
+                        {r.dDay != null && (
+                          <span className={`font-semibold ${r.dDay < 0 ? 'text-red-500' : r.dDay <= 14 ? 'text-amber-500' : theme.textGhost}`}>
+                            {r.dDay < 0 ? `${-r.dDay}일 지남` : r.dDay === 0 ? '오늘' : `D-${r.dDay}`}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+
+            {/* 소모품 교체 이력 */}
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+              <table className="w-full text-[11px]">
+                <thead className={theme.headerBg}>
+                  <tr className={`border-b ${theme.divider}`}>
+                    {['교체 시각', '라인', '설비', '소모품', '교체 전 잔량', '작업자'].map((h) => (
+                      <th key={h} className={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {maintLog.length === 0 && (
+                    <tr><td colSpan={6} className={`px-3 py-6 text-center ${theme.textFaint}`}>
+                      아직 교체 이력이 없습니다. 설비 상세 화면의 "교체" 버튼으로 소모품을 교체하면 여기에 쌓입니다.
+                    </td></tr>
+                  )}
+                  {maintLog.map((m) => {
+                    const d = new Date(m.at);
+                    return (
+                      <tr key={m.id} className={`border-b last:border-0 ${theme.divider}`}>
+                        <td className={`${td} tabular-nums ${theme.textFaint}`}>{fmtDate(d)} {fmtClock(d)}</td>
+                        <td className={`${td} ${theme.textSecondary}`}>{lineName(m.lineId)}</td>
+                        <td className={`${td} ${theme.textPrimary}`}>{m.name}</td>
+                        <td className={`${td} ${theme.textSecondary}`}>{m.label}</td>
+                        <td className={`${td} tabular-nums ${theme.textSecondary}`}>{Math.round(m.percentBefore)}% → 100%</td>
+                        <td className={`${td} ${theme.textFaint}`}>{m.user ?? '-'}</td>
                       </tr>
                     );
                   })}

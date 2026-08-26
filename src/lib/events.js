@@ -21,6 +21,8 @@ export const EVENT_TYPES = {
   JOB_COMPLETED: { label: '로트 완료', tone: 'emerald' },
   LAYOUT_MOVED: { label: '설비 배치 변경', tone: 'slate' },
   MEMO_ADDED: { label: '작업자 메모', tone: 'slate' },
+  CONSUMABLE_LOW: { label: '소모품 잔량 경고', tone: 'amber' },
+  MAINT_REPLACED: { label: '소모품 교체', tone: 'emerald' },
   LOGIN: { label: '로그인', tone: 'sky' },
   LOGOUT: { label: '로그아웃', tone: 'slate' },
   DATA_RESET: { label: '데이터 초기화', tone: 'amber' },

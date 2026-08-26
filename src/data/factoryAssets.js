@@ -81,8 +81,10 @@ export const FACTORY_ASSETS = [
     lastCheck: '2026-07-02',
     nextCheck: '2026-10-02',
     cycleSec: 42.7,
-    status: 'WARN',
-    statusMessage: '톱날 교체시기 임박',
+    /* 소모품 임박에 따른 '주의' 승격은 라이브 잔량(lib/maintenance.js)이 유도한다 —
+       정적 상태에 박아두면 교체 후에도 주의가 남는다 */
+    status: 'RUNNING',
+    statusMessage: '정상 절단 중',
     consumable: { label: '톱날 잔여', percent: 10 },
     history: [
       { date: '2026-07-02', type: '정기점검', note: '톱날 마모율 90% 확인, 교체 예정' },

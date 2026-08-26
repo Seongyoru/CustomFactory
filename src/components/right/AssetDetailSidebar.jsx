@@ -5,12 +5,13 @@
  */
 import React, { useState } from 'react';
 import {
-  ChevronDown, Cpu, GitCommitHorizontal, Save, Siren, StickyNote, Wrench, X,
+  ChevronDown, Cpu, GitCommitHorizontal, RefreshCw, Save, Siren, StickyNote, Wrench, X,
 } from 'lucide-react';
 import {
   CLIP_FPS, CONVEYOR_LOAD_MAX, CYLINDER_CAPACITY, SELECTABLE_ASSETS, STATUS,
   busyFramesOf, cycleFramesFor, cycleSecFor,
 } from '../../data/factoryAssets.js';
+import { CONSUMABLE_WARN_PCT, remainingEaOf } from '../../lib/maintenance.js';
 import { fmtClock, fmtDate, fmtKoDateTime } from '../../lib/format.js';
 import { ConsumableBar, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 import TelemetryPanel from './TelemetryPanel.jsx';
@@ -116,7 +117,7 @@ const BottleneckPanel = ({ theme, asset, lineTaktSec }) => {
 const AssetDetailSidebar = ({
   theme, mode, asset, fault, lineStopped, onClose, now, memos, onAddMemo,
   memoAuthor = '-', canWriteMemo = true, memoHint, lineId, lineName, telemetry, lineTaktSec = 2.53,
-  cylinder,
+  cylinder, onReplaceConsumable, canMaintain = true, maintainHint,
 }) => {
   const [memoDraft, setMemoDraft] = useState('');
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -180,6 +181,21 @@ const AssetDetailSidebar = ({
           {asset?.consumable && (
             <div className={`mt-3 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
               <ConsumableBar label={asset.consumable.label} percent={asset.consumable.percent} theme={theme} />
+              {/* 잔량은 생산이 진행될수록 실제로 줄어든다 — 교체하면 100% 리셋 + 이력 기록 */}
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className={`text-[10px] tabular-nums ${asset.consumable.percent <= CONSUMABLE_WARN_PCT ? 'text-red-500 font-semibold' : theme.textGhost}`}>
+                  예상 잔여 {remainingEaOf(asset.consumable.percent, asset.id)} EA
+                </span>
+                <GhostButton
+                  icon={RefreshCw}
+                  theme={theme}
+                  disabled={!canMaintain}
+                  title={!canMaintain ? maintainHint : `${asset.consumable.label} 교체 — 잔량 100% 리셋, 교체 이력에 기록됩니다`}
+                  onClick={() => onReplaceConsumable?.(asset.id)}
+                >
+                  교체
+                </GhostButton>
+              </div>
             </div>
           )}
 

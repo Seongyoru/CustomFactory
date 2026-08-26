@@ -28,6 +28,7 @@ const ROLE_PERMISSIONS = {
     'memo.write',
     'fault.test',
     'report.export',
+    'maintenance.perform',
   ],
   admin: [
     'estop.engage',
@@ -36,6 +37,7 @@ const ROLE_PERMISSIONS = {
     'memo.write',
     'fault.test',
     'report.export',
+    'maintenance.perform',
     'layout.adjust',
     'data.reset',
     'source.configure',
@@ -51,6 +53,7 @@ export const PERMISSION_HINTS = {
   'estop.release': '비상 정지 해제는 라인 운영자 이상만 가능합니다.',
   'layout.adjust': '설비 배치 조정은 시스템 관리자만 가능합니다.',
   'memo.write': '메모 작성은 라인 운영자 이상만 가능합니다.',
+  'maintenance.perform': '소모품 교체는 라인 운영자 이상만 가능합니다.',
   'fault.test': '오류 테스트는 라인 운영자 이상만 가능합니다.',
   'report.export': '리포트 내보내기는 라인 운영자 이상만 가능합니다.',
   'data.reset': '데이터 초기화는 시스템 관리자만 가능합니다.',

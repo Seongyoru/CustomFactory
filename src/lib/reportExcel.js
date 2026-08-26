@@ -13,7 +13,9 @@ const fmtIso = (iso) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
 
-export async function downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots = [] }) {
+export async function downloadReportWorkbook({
+  production, events, lineStats, oeeByLine, simSnapshots = [], maintRows = [], maintLog = [],
+}) {
   /* xlsx 는 내보내기를 실제로 누를 때만 내려받는다 */
   const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
@@ -88,7 +90,32 @@ export async function downloadReportWorkbook({ production, events, lineStats, oe
     XLSX.utils.book_append_sheet(wb, wsSim, '시뮬레이션 스냅샷');
   }
 
-  /* 5) 전체 이벤트 로그 */
+  /* 5) 설비 보전 — 소모품·점검 현황 + 교체 이력 */
+  if (maintRows.length > 0) {
+    const maintSheetRows = [
+      ['라인', '설비', '시리얼', '소모품', '잔량(%)', '예상 잔여(EA)', '차기 점검', 'D-day'],
+      ...maintRows.map((r) => [
+        lineName(r.lineId), r.name, r.sn, r.label, r.percent, r.remainEa, r.nextCheck,
+        r.dDay == null ? '' : r.dDay,
+      ]),
+    ];
+    const wsMaint = XLSX.utils.aoa_to_sheet(maintSheetRows);
+    wsMaint['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 9 }, { wch: 13 }, { wch: 12 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, wsMaint, '설비 보전');
+  }
+  if (maintLog.length > 0) {
+    const replaceRows = [
+      ['교체 시각', '라인', '설비', '소모품', '교체 전 잔량(%)', '작업자'],
+      ...maintLog.map((m) => [
+        fmtIso(m.at), lineName(m.lineId), m.name, m.label, Math.round(m.percentBefore), m.user ?? '-',
+      ]),
+    ];
+    const wsReplace = XLSX.utils.aoa_to_sheet(replaceRows);
+    wsReplace['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsReplace, '소모품 교체 이력');
+  }
+
+  /* 6) 전체 이벤트 로그 */
   const eventRows = [
     ['시각', '구분', '라인', '내용'],
     ...events.map((e) => [fmtIso(e.at), eventLabel(e.type), lineName(e.lineId), e.message]),
