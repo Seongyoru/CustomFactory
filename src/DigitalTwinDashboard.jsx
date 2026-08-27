@@ -75,7 +75,9 @@ import FaultAlarmModal from './components/modals/FaultAlarmModal.jsx';
 import EStopModal from './components/modals/EStopModal.jsx';
 import ReportModal from './components/report/ReportModal.jsx';
 import SourceSettingsModal from './components/modals/SourceSettingsModal.jsx';
-import { clearAllPersisted } from './lib/persist.js';
+import {
+  clearAllPersisted, getRemoteStoreUrl, pushAllToRemote, setRemoteStoreUrl,
+} from './lib/persist.js';
 import { PERMISSION_HINTS, ROLES, hasPermission } from './auth/auth.js';
 import LoginScreen from './auth/LoginScreen.jsx';
 import TutorialOverlay from './components/TutorialOverlay.jsx';
@@ -1141,6 +1143,17 @@ export default function DigitalTwinDashboard() {
           }}
           cctvFeeds={CCTV_FEEDS}
           cctvConfig={cctvConfig}
+          remoteStoreUrl={getRemoteStoreUrl()}
+          onSaveRemoteStore={(url) => {
+            if (!can('source.configure')) return;
+            if (url === getRemoteStoreUrl()) return;
+            setRemoteStoreUrl(url);
+            logEvent(
+              'PERSIST_CONFIGURED',
+              url ? `서버 저장소 연결 (${url}) — 현재 데이터 업로드` : '서버 저장소 해제 — 로컬 전용'
+            );
+            if (url) pushAllToRemote(); // 지금 로컬 상태를 서버의 시작점으로
+          }}
           onSaveCctv={(next) => {
             if (!can('source.configure')) return;
             const changed = JSON.stringify(next) !== JSON.stringify(cctvConfig);

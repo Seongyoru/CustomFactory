@@ -9,6 +9,7 @@
     "sim": "node server.js --source sim",
     "opcua": "node server.js --source opcua",
     "demo-plc": "node demo-opcua-server.js",
+    "persist": "node persist-server.js",
     "selftest": "node selftest.js"
   },
   "dependencies": {

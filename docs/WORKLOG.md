@@ -534,3 +534,25 @@ KIOSK_STARTED 이벤트 타입은 과거 로그 라벨용으로만 잔존.
   Draco 지오메트리 등 7개 버퍼뷰는 SHA-256 체크섬으로 바이트 무손상 증명
 - Khronos gltf-validator: errors 0 · warnings 0. 텍스처 아틀라스 육안 검수 완료
 - 첫 로딩 8.1MB 절감 (92%)
+
+---
+
+## 서버 저장소 참조 구현 (2026-08-27) — 로드맵 마지막 항목
+
+### 설계 — 동기 usePersistentState 구조 무변경
+- **부팅 선주입**: main.jsx 가 앱 마운트 전에 GET /store 스냅샷을 localStorage 에
+  주입(3초 제한, 실패 시 로컬로 진행) → 화면 코드는 여전히 동기 로컬만 본다
+- **write-through**: persist.js 의 writeStore/removeStore 가 로컬에 쓰고 서버에도
+  기록(키별 500ms 디바운스, 실패 무시 — 서버가 죽어도 화면은 계속)
+- 연결 URL 은 `egis-dt.remoteStore`(버전 밖) — 데모 초기화가 데이터는 지워도 연결은
+  유지하고, 서버 저장소도 함께 비운다(안 비우면 리로드 때 지운 데이터가 부활)
+
+### 구성
+- `gateway/persist-server.js` — 제로 의존성 HTTP 서버, 단일 JSON 파일(원자적
+  tmp→rename), GET /store · PUT/DELETE /store/<key> · DELETE /store, CORS
+- 소스 설정 모달 "서버 저장소" 섹션(관리자) — 적용 시 현재 데이터 일괄 업로드
+  (pushAllToRemote), PERSIST_CONFIGURED 감사 이벤트
+
+### E2E 실측
+연결 → 17개 키 일괄 업로드(rev 18) → 마커 기록 → **로컬 17개 키 전부 삭제 →
+리로드 → 서버 스냅샷에서 17개 키 복원, 선두 로트 마커 일치, 로그인 세션 유지**

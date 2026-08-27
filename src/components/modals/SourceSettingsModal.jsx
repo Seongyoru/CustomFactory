@@ -7,12 +7,13 @@
  *  권한과 무관하게 닿아야 하기 때문이다.
  */
 import React, { useState } from 'react';
-import { Cctv, Radio, X } from 'lucide-react';
+import { Cctv, Database, Radio, X } from 'lucide-react';
 import { Modal } from '../ui.jsx';
 
 const SourceSettingsModal = ({
   theme, config, connectionStatus, readOnly = false, onSave, onClose,
   cctvFeeds = [], cctvConfig = {}, onSaveCctv,
+  remoteStoreUrl = '', onSaveRemoteStore,
 }) => {
   const [type, setType] = useState(config?.type === 'opcua' ? 'opcua' : 'sim');
   const [url, setUrl] = useState(config?.url ?? 'wss://');
@@ -21,6 +22,8 @@ const SourceSettingsModal = ({
   const [cctvDraft, setCctvDraft] = useState(() =>
     Object.fromEntries(cctvFeeds.map((f) => [f.id, cctvConfig[f.id] ?? '']))
   );
+  /* 서버 저장소 주소 초안 — 빈 값 = 로컬 전용 */
+  const [storeDraft, setStoreDraft] = useState(remoteStoreUrl);
 
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
@@ -53,6 +56,14 @@ const SourceSettingsModal = ({
         return;
       }
     }
+    const storeTrimmed = storeDraft.trim();
+    if (storeTrimmed !== '') {
+      const e = cctvUrlError(storeTrimmed); // 같은 규칙: http(s)·공백 금지·혼합 콘텐츠
+      if (e) {
+        setError(`서버 저장소: ${e}`);
+        return;
+      }
+    }
     if (type === 'opcua') {
       const trimmed = url.trim();
       /* URL 파서로 검증한다 — 정규식과 달리 대문자 스킴(WSS://…)을 정상 수용한다.
@@ -78,6 +89,7 @@ const SourceSettingsModal = ({
     } else {
       onSave({ type: 'sim' });
     }
+    onSaveRemoteStore?.(storeTrimmed.replace(/\/+$/, ''));
     /* 카메라 주소 — 빈 값은 저장하지 않는다 (기본 데모 영상으로 복귀) */
     onSaveCctv?.(
       Object.fromEntries(
@@ -207,6 +219,28 @@ const SourceSettingsModal = ({
             ))}
           </div>
         )}
+
+        {/* 서버 저장소 — 대기열·실적·이력을 중앙 서버에 보관 (참조: gateway/persist-server.js) */}
+        <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} p-3 space-y-2`}>
+          <p className={`flex items-center gap-1.5 text-[11px] font-semibold ${theme.textPrimary}`}>
+            <Database className={`w-3.5 h-3.5 ${theme.accentText}`} /> 서버 저장소
+          </p>
+          <p className={`text-[10px] leading-relaxed ${theme.textGhost}`}>
+            주소를 넣으면 지금 데이터를 서버로 올리고, 이후의 모든 변경이 서버에도 저장됩니다.
+            다음 접속(새로고침)부터는 서버 데이터로 시작해 브라우저를 바꿔도 상태가 이어집니다.
+            빈 칸 = 이 브라우저에만 저장. 참조 서버: <code>gateway/persist-server.js</code>
+          </p>
+          <input
+            value={storeDraft}
+            disabled={readOnly}
+            onChange={(e) => { setStoreDraft(e.target.value); setError(''); }}
+            placeholder="http://localhost:8126"
+            spellCheck={false}
+            className={`w-full h-8 px-3 rounded-lg border ${theme.panelBorder} ${theme.inputBg}
+              text-[11px] tabular-nums ${theme.textPrimary} focus:outline-none focus:ring-2 ${theme.accentRing}
+              disabled:opacity-60`}
+          />
+        </div>
 
         {error && <p className="text-[11px] text-red-500">{error}</p>}
       </div>
