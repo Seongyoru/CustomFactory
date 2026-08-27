@@ -522,3 +522,15 @@ KIOSK_STARTED 이벤트 타입은 과거 로그 라벨용으로만 잔존.
 ### 남은 로드맵 메모
 - INTERIOR 텍스처: 디자이너 재출력 대기 (코드 0줄)
 - 서버 저장소: usePersistentState 동기 구조 → 비동기 원격 저장 전환이 필요한 대수술 — 인프라 확정 후 착수
+
+---
+
+## INTERIOR 텍스처 최적화 — 8.84MB → 0.72MB (2026-08-27)
+
+디자이너 재출력 없이 해결. 현재 GLB 의 JPEG 는 이미 sRGB 3채널이라(과거 CMYK 문제는
+현 파일에 해당 없음) sharp 재인코딩이 그대로 통했다:
+- 4096² 6.41MB → 2048² 0.22MB, 2048² 2.19MB → 0.25MB (q82·4:2:0·mozjpeg)
+- GLB 는 재인코딩 없이 **바이너리 수술**(scratchpad glb-swap): 이미지 버퍼뷰만 교체,
+  Draco 지오메트리 등 7개 버퍼뷰는 SHA-256 체크섬으로 바이트 무손상 증명
+- Khronos gltf-validator: errors 0 · warnings 0. 텍스처 아틀라스 육안 검수 완료
+- 첫 로딩 8.1MB 절감 (92%)
