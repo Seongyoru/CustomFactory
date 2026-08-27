@@ -8,7 +8,7 @@
  */
 import React from 'react';
 import {
-  Activity, AlertOctagon, ArrowRight, Clock, Factory, Gauge, Layers, Siren, Tv, Wrench,
+  Activity, AlertOctagon, ArrowRight, Clock, Factory, Gauge, Layers, Siren, Wrench,
 } from 'lucide-react';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
 import { fmtClock, fmtDate } from '../../lib/format.js';
@@ -59,7 +59,7 @@ const Stat = ({ theme, label, value, warn = false }) => (
   </div>
 );
 
-const PlantOverview = ({ theme, data = [], now, onEnterLine, onStartKiosk, kiosk = false }) => {
+const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
   const running = data.filter((d) => d.head && !d.eStop).length;
   const stopped = data.filter((d) => d.eStop).length;
   const alarmTotal = data.reduce((s, d) => s + d.alarms.length, 0);
@@ -86,19 +86,6 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine, onStartKiosk, kiosk
               <AlertOctagon className="w-3.5 h-3.5 text-red-500" /> 정지 {stopped}
             </span>
             <span>{fmtDate(now)} {fmtClock(now)}</span>
-            {/* 키오스크 — 벽면 TV 용 풀스크린 + 자동 순환 */}
-            {!kiosk && (
-              <button
-                type="button"
-                onClick={onStartKiosk}
-                title="풀스크린으로 전환하고 관제·라인 화면을 자동 순환합니다 (클릭/ESC 로 종료)"
-                className={`flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-semibold
-                  transition-colors focus:outline-none focus:ring-2 ${theme.accentRing}
-                  ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg}`}
-              >
-                <Tv className="w-3.5 h-3.5" /> 키오스크 모드
-              </button>
-            )}
           </div>
         </header>
 

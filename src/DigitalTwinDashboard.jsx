@@ -143,8 +143,6 @@ export default function DigitalTwinDashboard() {
   const [plant, setPlant] = useState(PLANTS[0].id);
   /* 화면 뷰 — 'line': 선택된 라인의 3D 상세, 'overview': 전 라인 관제 */
   const [view, setView] = useState('line');
-  /* 키오스크 모드 — 벽면 TV 용: 풀스크린 + 관제↔라인 상세 자동 순환, 아무 조작으로 종료 */
-  const [kiosk, setKiosk] = useState(false);
   /* 대기열(로트)은 라인별로 완전히 분리된다. 품목 카탈로그(products)만 라인 공용이다.
      대기열·카탈로그·배치·메모·이력은 localStorage 에 저장되어 새로고침에도 유지된다. */
   const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE, reviveJobsByLine);
@@ -609,53 +607,6 @@ export default function DigitalTwinDashboard() {
   };
 
   /**
-   * 키오스크 모드 — 관제 → 라인 1 → 라인 2 → … 를 일정 간격으로 자동 순환한다.
-   *  아무 클릭/ESC/풀스크린 해제로 즉시 종료 (관람 전용이라 조작 = 종료가 예측 가능하다).
-   *  풀스크린 요청이 거부돼도(권한/브라우저) 순환 자체는 동작한다.
-   */
-  useEffect(() => {
-    if (!kiosk) return undefined;
-    const seq = ['overview', ...PLANTS.map((p) => p.id)];
-    let idx = 0;
-    const tick = setInterval(() => {
-      idx = (idx + 1) % seq.length;
-      const stop = seq[idx];
-      if (stop === 'overview') {
-        setView('overview');
-      } else {
-        setPlant(stop);
-        setSelectedId(null);
-        setSelectedJobId(null);
-        setView('line');
-      }
-    }, 12_000);
-    const exit = () => setKiosk(false);
-    const onKey = (e) => {
-      if (e.key === 'Escape') exit();
-    };
-    const onFsChange = () => {
-      if (!document.fullscreenElement) exit();
-    };
-    window.addEventListener('pointerdown', exit, true);
-    window.addEventListener('keydown', onKey);
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => {
-      clearInterval(tick);
-      window.removeEventListener('pointerdown', exit, true);
-      window.removeEventListener('keydown', onKey);
-      document.removeEventListener('fullscreenchange', onFsChange);
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    };
-  }, [kiosk]);
-
-  const handleStartKiosk = () => {
-    setView('overview');
-    setKiosk(true);
-    logEvent('KIOSK_STARTED', '키오스크 모드 시작 (관제 자동 순환)');
-    document.documentElement.requestFullscreen?.().catch(() => {});
-  };
-
-  /**
    * 3D 기즈모 드래그가 끝날 때 한 번 호출된다.
    * 조작 가능한 것은 선택된 라인뿐이므로 그 라인의 배치에만 기록한다.
    * (씬 memo 유지를 위해 참조 고정 — plant 가 바뀔 때만 새로 만든다)
@@ -976,19 +927,7 @@ export default function DigitalTwinDashboard() {
             handlePlantChange(lineId);
             setView('line');
           }}
-          onStartKiosk={handleStartKiosk}
-          kiosk={kiosk}
         />
-      )}
-
-      {/* 키오스크 안내 — 관람 전용 모드임과 나가는 방법을 조용히 알린다 */}
-      {kiosk && (
-        <div
-          className={`pointer-events-none fixed bottom-9 right-4 z-40 px-3 py-1.5 rounded-lg border
-            ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-sm text-[10px] font-semibold ${theme.textMuted}`}
-        >
-          키오스크 모드 · 화면 자동 순환 중 — 클릭하거나 ESC 로 종료
-        </div>
       )}
 
       <div className={`relative flex-1 min-h-0 ${view === 'overview' ? 'hidden' : 'flex'}`}>
