@@ -100,7 +100,7 @@ const TwinViewport = ({
   theme, mode, selectedId, selectedAsset, onSelect,
   offsets, offsetsByLine, onMove, onOffsetReset, now, simElapsed, speed, onExpandCam,
   animTimeScale, animByLine, animPaused, activeLineId, faults, focusRequest,
-  onFocusAsset, dischargedByLine,
+  onFocusAsset, dischargedByLine, cctvFeeds = CCTV_FEEDS,
   canAdjustLayout = true,
 }) => {
   const controlsRef = useRef(null);
@@ -354,7 +354,7 @@ const TwinViewport = ({
 
             {cctvOpen && (
               <div className="flex gap-2 p-2">
-                {CCTV_FEEDS.map((cam) => (
+                {cctvFeeds.map((cam) => (
                   <figure
                     key={cam.id}
                     className={`relative w-[184px] aspect-video rounded-md overflow-hidden border ${theme.panelBorder} bg-slate-950 group`}

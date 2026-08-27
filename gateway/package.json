@@ -1,0 +1,18 @@
+{
+  "name": "egis-opcua-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "EGIS Factory 디지털 트윈 — OPC-UA ↔ WebSocket 중계 게이트웨이 (참조 구현)",
+  "scripts": {
+    "start": "node server.js",
+    "sim": "node server.js --source sim",
+    "opcua": "node server.js --source opcua",
+    "demo-plc": "node demo-opcua-server.js",
+    "selftest": "node selftest.js"
+  },
+  "dependencies": {
+    "node-opcua": "^2.125.0",
+    "ws": "^8.18.0"
+  }
+}

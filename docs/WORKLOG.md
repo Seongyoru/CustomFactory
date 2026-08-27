@@ -501,3 +501,24 @@ acked 재확인 이벤트 중복, 오류 테스트 무작위 무동작 — 전�
 ### 키오스크 모드 제거 (사용자 결정, 같은 날)
 관제 뷰의 키오스크(풀스크린 자동 순환)는 불필요 판단으로 제거. ETA·합계 밴드·스파크라인·다음 로트는 유지.
 KIOSK_STARTED 이벤트 타입은 과거 로그 라벨용으로만 잔존.
+
+---
+
+## 로드맵 착수 — 실게이트웨이 참조 서버 + CCTV HLS 대응 (2026-08-27)
+
+### 1. OPC-UA↔WS 게이트웨이 참조 구현 (`gateway/`)
+- 독립 Node 패키지(ws + node-opcua). 프론트의 라인·설비 정의와 텔레메트리 기준값을 `../src` 에서 import — ID·프레임 규격 단일 소스
+- `server.js`: WS 서버(기본 8125) + 1초 스냅샷 브로드캐스트(latencyMs=계측 나이) + 접속 즉시 첫 프레임. 소스 2종: `--source sim`(내장) / `--source opcua`(tags.config 구독)
+- `tags.example.json`: nodeIdTemplate(규칙적) + tags 배열(불규칙) 혼용. 알람은 라인별 문자열 태그(JSON) 관례
+- `demo-opcua-server.js`: 가짜 PLC — 관례대로 태그 38개 노출, 값 랜덤워크, 90초마다 알람
+- `selftest.js`: 프레임을 **대시보드의 실제 파서**(src/telemetry/opcuaSource.js)로 검증
+- **E2E 실측**: 데모 PLC → 게이트웨이 → selftest PASS(3프레임, 전 라인·전 설비) → 대시보드 소스 전환 → 하단바 "OPC-UA 게이트웨이 연결됨" + 센서 패널 "OPC-UA · 1Hz" 실측값 표시까지 전 경로 확인
+
+### 2. CCTV 실스트림(HLS) 대응
+- `CctvVideo`: `.m3u8` 소스면 hls.js 동적 로드(다른 배포는 번들 비용 0) + Safari 네이티브 폴백 + LIVE 뱃지 + 치명 오류 시 안내 화면. mp4 데모는 기존대로 루프
+- 데이터 소스 설정 모달에 CCTV 섹션: 카메라별 스트림 주소(빈 값=데모 mp4, URL 검증·HTTPS 혼합콘텐츠 거부), `egis-dt.v3.cctvConfig` 저장, CCTV_CONFIGURED 감사 이벤트
+- 실카메라 연결 시: RTSP → MediaMTX 등으로 HLS 변환 → 주소만 입력
+
+### 남은 로드맵 메모
+- INTERIOR 텍스처: 디자이너 재출력 대기 (코드 0줄)
+- 서버 저장소: usePersistentState 동기 구조 → 비동기 원격 저장 전환이 필요한 대수술 — 인프라 확정 후 착수

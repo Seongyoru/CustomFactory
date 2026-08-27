@@ -1,0 +1,18 @@
+{
+  "$comment": "실 PLC 적용 시 이 파일을 tags.config.json 으로 복사해 endpoint 와 태그 주소를 현장 값으로 바꾸세요. 태그 주소가 규칙적이면 nodeIdTemplate, 불규칙하면 tags 배열에 명시하면 됩니다 (둘 다 쓰면 합쳐집니다).",
+  "endpoint": "opc.tcp://localhost:4840/egis",
+  "lines": ["L1", "L2"],
+  "assets": [
+    "CUTTING_UNIT",
+    "CONVEYOR_UNIT",
+    "CART_UNIT",
+    "LOAD_TRANSFER_ROBOT",
+    "POLY_ROBOT",
+    "POPUP_UNIT"
+  ],
+  "metrics": ["temp", "vib", "amp"],
+  "nodeIdTemplate": "ns=1;s={lineId}.{assetId}.{metric}",
+  "alarmNodeTemplate": "ns=1;s={lineId}.ALARM",
+  "tags": [],
+  "alarmNodes": []
+}

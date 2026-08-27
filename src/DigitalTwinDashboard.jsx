@@ -40,6 +40,7 @@ import {
 } from './data/factoryAssets.js';
 import { findLineAsset, lineSelectableAssets, memoKeyOf } from './data/lineAssets.js';
 import {
+  CCTV_FEEDS,
   INITIAL_JOBS_BY_LINE,
   INITIAL_OFFSETS_BY_LINE,
   INITIAL_PRODUCT_CATALOG,
@@ -179,6 +180,16 @@ export default function DigitalTwinDashboard() {
 
   /* 텔레메트리 데이터 소스 — 시뮬레이션(기본) 또는 OPC-UA WebSocket 게이트웨이 */
   const [telemetryConfig, setTelemetryConfig] = usePersistentState('telemetryConfig', { type: 'sim' });
+  /* CCTV 카메라별 소스 오버라이드 — { CAM-01: 'https://…/stream.m3u8' }. 빈 값 = 데모 mp4 */
+  const [cctvConfig, setCctvConfig] = usePersistentState('cctvConfig', {});
+  const cctvFeeds = useMemo(
+    () =>
+      CCTV_FEEDS.map((f) => {
+        const custom = (cctvConfig[f.id] ?? '').trim();
+        return custom ? { ...f, src: custom, custom: true } : f;
+      }),
+    [cctvConfig]
+  );
 
   /* 튜토리얼 — 로그인(또는 세션이 살아있는 재접속)마다 자동 실행.
      건너뛰면 그 세션 동안만 닫히고, 프로필 메뉴에서 언제든 다시 볼 수 있다. */
@@ -971,6 +982,7 @@ export default function DigitalTwinDashboard() {
           now={now}
           simElapsed={elapsed}
           speed={speed}
+          cctvFeeds={cctvFeeds}
           onExpandCam={setExpandedCam}
           animTimeScale={animTimeScale}
           animByLine={animByLine}
@@ -1125,6 +1137,21 @@ export default function DigitalTwinDashboard() {
             logEvent(
               'SOURCE_CHANGED',
               next.type === 'opcua' ? `데이터 소스 → OPC-UA 게이트웨이 (${next.url})` : '데이터 소스 → 시뮬레이션'
+            );
+          }}
+          cctvFeeds={CCTV_FEEDS}
+          cctvConfig={cctvConfig}
+          onSaveCctv={(next) => {
+            if (!can('source.configure')) return;
+            const changed = JSON.stringify(next) !== JSON.stringify(cctvConfig);
+            if (!changed) return;
+            setCctvConfig(next);
+            const customCount = Object.keys(next).length;
+            logEvent(
+              'CCTV_CONFIGURED',
+              customCount > 0
+                ? `CCTV 실스트림 주소 설정 (${customCount}대)`
+                : 'CCTV 기본 데모 영상으로 복귀'
             );
           }}
           onClose={() => setSourceModal(false)}

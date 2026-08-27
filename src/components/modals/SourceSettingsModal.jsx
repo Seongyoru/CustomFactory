@@ -1,23 +1,58 @@
 /**
- * 데이터 소스 설정 — 시뮬레이션 ↔ OPC-UA 게이트웨이 전환 (전환은 관리자 전용)
+ * 데이터 소스 설정 — 시뮬레이션 ↔ OPC-UA 게이트웨이 전환 + CCTV 스트림 주소
+ *  (전환·수정은 관리자 전용)
  *  게이트웨이가 없는 환경(정적 데모 배포)에서는 기능을 숨기지 않고
  *  '대신 이렇게 하세요' 안내로 갈라 둔다.
  *  비관리자에게는 읽기 전용으로 열린다 — 연결 실패 시 원인·조치 안내는
  *  권한과 무관하게 닿아야 하기 때문이다.
  */
 import React, { useState } from 'react';
-import { Radio, X } from 'lucide-react';
+import { Cctv, Radio, X } from 'lucide-react';
 import { Modal } from '../ui.jsx';
 
-const SourceSettingsModal = ({ theme, config, connectionStatus, readOnly = false, onSave, onClose }) => {
+const SourceSettingsModal = ({
+  theme, config, connectionStatus, readOnly = false, onSave, onClose,
+  cctvFeeds = [], cctvConfig = {}, onSaveCctv,
+}) => {
   const [type, setType] = useState(config?.type === 'opcua' ? 'opcua' : 'sim');
   const [url, setUrl] = useState(config?.url ?? 'wss://');
   const [error, setError] = useState('');
+  /* 카메라별 스트림 주소 초안 — 빈 값 = 기본 데모 영상 */
+  const [cctvDraft, setCctvDraft] = useState(() =>
+    Object.fromEntries(cctvFeeds.map((f) => [f.id, cctvConfig[f.id] ?? '']))
+  );
 
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
+  /* 카메라 주소 검증 — 빈 값은 기본 영상 복귀라 통과 */
+  const cctvUrlError = (raw) => {
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    let parsed;
+    try {
+      if (/\s/.test(trimmed)) throw new Error('whitespace');
+      parsed = new URL(trimmed);
+    } catch {
+      return '올바른 URL 형식이 아닙니다.';
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return '카메라 주소는 http:// 또는 https:// 로 시작해야 합니다 (HLS .m3u8 권장).';
+    }
+    if (isHttps && parsed.protocol === 'http:') {
+      return 'HTTPS 로 배포된 페이지에서는 https:// 스트림만 재생됩니다.';
+    }
+    return null;
+  };
+
   const save = () => {
     if (readOnly) return;
+    for (const f of cctvFeeds) {
+      const e = cctvUrlError(cctvDraft[f.id] ?? '');
+      if (e) {
+        setError(`${f.id}: ${e}`);
+        return;
+      }
+    }
     if (type === 'opcua') {
       const trimmed = url.trim();
       /* URL 파서로 검증한다 — 정규식과 달리 대문자 스킴(WSS://…)을 정상 수용한다.
@@ -43,6 +78,14 @@ const SourceSettingsModal = ({ theme, config, connectionStatus, readOnly = false
     } else {
       onSave({ type: 'sim' });
     }
+    /* 카메라 주소 — 빈 값은 저장하지 않는다 (기본 데모 영상으로 복귀) */
+    onSaveCctv?.(
+      Object.fromEntries(
+        Object.entries(cctvDraft)
+          .map(([id, u]) => [id, u.trim()])
+          .filter(([, u]) => u !== '')
+      )
+    );
     onClose();
   };
 
@@ -128,6 +171,40 @@ const SourceSettingsModal = ({ theme, config, connectionStatus, readOnly = false
               {'{ type: "alarm", lineId·assetId·code·title·detail }'} — 자세한 형식은
               src/telemetry/opcuaSource.js 참조. 연결이 끊기면 자동 재접속합니다.
             </p>
+          </div>
+        )}
+
+        {/* CCTV 스트림 주소 — 카메라별 오버라이드 (빈 칸 = 기본 데모 영상) */}
+        {cctvFeeds.length > 0 && (
+          <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} p-3 space-y-2`}>
+            <p className={`flex items-center gap-1.5 text-[11px] font-semibold ${theme.textPrimary}`}>
+              <Cctv className={`w-3.5 h-3.5 ${theme.accentText}`} /> CCTV 스트림 주소
+            </p>
+            <p className={`text-[10px] leading-relaxed ${theme.textGhost}`}>
+              카메라별 실스트림(HLS .m3u8 권장) 주소를 넣으면 데모 영상 대신 재생됩니다.
+              비워 두면 기본 데모 영상(mp4 루프)을 씁니다. RTSP 카메라는 MediaMTX 같은
+              중계 서버로 HLS 변환이 필요합니다.
+            </p>
+            {cctvFeeds.map((f) => (
+              <label key={f.id} className="block">
+                <span className={`block text-[10px] mb-1 ${theme.textMuted}`}>
+                  {f.id} · {f.label}
+                </span>
+                <input
+                  value={cctvDraft[f.id] ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    setCctvDraft((prev) => ({ ...prev, [f.id]: e.target.value }));
+                    setError('');
+                  }}
+                  placeholder="https://stream.factory.local/cam-01/index.m3u8"
+                  spellCheck={false}
+                  className={`w-full h-8 px-3 rounded-lg border ${theme.panelBorder} ${theme.inputBg}
+                    text-[11px] tabular-nums ${theme.textPrimary} focus:outline-none focus:ring-2 ${theme.accentRing}
+                    disabled:opacity-60`}
+                />
+              </label>
+            ))}
           </div>
         )}
 
