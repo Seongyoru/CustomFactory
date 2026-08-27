@@ -31,9 +31,40 @@ const LoginScreen = ({ theme, onLogin }) => {
     onLogin(selected);
   };
 
+  const isDark = theme.appearance === 'dark';
   return (
-    <div className={`w-screen h-screen grid place-items-center font-sans ${theme.appBg}`}>
-      <div className={`w-[420px] rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl overflow-hidden`}>
+    <div className={`relative w-screen h-screen grid place-items-center font-sans overflow-hidden ${theme.appBg}`}>
+      {/* 배경 연출 — 포인트 컬러 광원 2개가 천천히 떠다니고, 산업 도면풍 그리드가 깔린다 */}
+      <div className="pointer-events-none absolute inset-0" aria-hidden>
+        <div
+          className="login-blob absolute -top-1/4 -left-1/4 w-[70vw] h-[70vw] rounded-full"
+          style={{
+            background: `radial-gradient(circle, ${theme.accentHex}${isDark ? '2e' : '24'} 0%, transparent 62%)`,
+            filter: 'blur(40px)',
+          }}
+        />
+        <div
+          className="login-blob absolute -bottom-1/3 -right-1/4 w-[60vw] h-[60vw] rounded-full"
+          style={{
+            background: `radial-gradient(circle, ${theme.accentHex}${isDark ? '22' : '1c'} 0%, transparent 60%)`,
+            filter: 'blur(40px)',
+            animationDelay: '-8s',
+            animationDirection: 'alternate-reverse',
+          }}
+        />
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `linear-gradient(${isDark ? 'rgba(148,163,184,0.05)' : 'rgba(15,23,42,0.05)'} 1px, transparent 1px),
+              linear-gradient(90deg, ${isDark ? 'rgba(148,163,184,0.05)' : 'rgba(15,23,42,0.05)'} 1px, transparent 1px)`,
+            backgroundSize: '44px 44px',
+            maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 75%)',
+          }}
+        />
+      </div>
+
+      <div className={`anim-pop relative w-[420px] rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl ${theme.glow} overflow-hidden`}>
         {/* 브랜드 헤더 */}
         <header className={`px-6 pt-7 pb-5 text-center border-b ${theme.divider}`}>
           <div className="flex items-center justify-center gap-2.5">

@@ -16,6 +16,20 @@ const lineNameOf = (id) => PRODUCTION_LINES.find((l) => l.id === id)?.name ?? id
 const AlarmCenter = ({ theme, alarms = [], onGoTo, onClear, canClear = true, clearHint }) => {
   const [open, setOpen] = useState(false);
   const boxRef = useRef(null);
+  /* 새 미확인 알람이 오면 종이 0.6초 흔들린다 */
+  const [ringing, setRinging] = useState(false);
+  const prevUnackedRef = useRef(0);
+  const unackedNow = alarms.filter((a) => !a.acked).length;
+  useEffect(() => {
+    if (unackedNow > prevUnackedRef.current) {
+      setRinging(true);
+      const t = setTimeout(() => setRinging(false), 650);
+      prevUnackedRef.current = unackedNow;
+      return () => clearTimeout(t);
+    }
+    prevUnackedRef.current = unackedNow;
+    return undefined;
+  }, [unackedNow]);
   useEffect(() => {
     if (!open) return undefined;
     const close = (e) => {
@@ -42,7 +56,7 @@ const AlarmCenter = ({ theme, alarms = [], onGoTo, onClear, canClear = true, cle
             ? 'border-red-500/50 bg-red-500/10 text-red-500 hover:bg-red-500/20'
             : `${theme.panelBorder} ${theme.subtleBg} ${theme.textSecondary} ${theme.hoverBg}`}`}
       >
-        <Bell className="w-4 h-4" />
+        <Bell className={`w-4 h-4 ${ringing ? 'anim-bell' : ''}`} />
         {alarms.length > 0 && (
           <span
             className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 grid place-items-center
@@ -56,7 +70,7 @@ const AlarmCenter = ({ theme, alarms = [], onGoTo, onClear, canClear = true, cle
 
       {open && (
         <div
-          className={`absolute right-0 top-full mt-1.5 w-[340px] rounded-lg border ${theme.panelBorder}
+          className={`anim-drop absolute right-0 top-full mt-1.5 w-[340px] rounded-lg border ${theme.panelBorder}
             ${theme.headerBg} shadow-2xl overflow-hidden z-50`}
         >
           <div className={`flex items-center justify-between px-3 py-2.5 border-b ${theme.divider}`}>

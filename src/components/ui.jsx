@@ -3,9 +3,44 @@
  *  공용 UI 프리미티브 — Panel / StatusLamp / GhostButton / Modal / BrandLogo
  * =============================================================================
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Boxes, Info } from 'lucide-react';
+
+/**
+ * 숫자 카운트업 — 값이 바뀌면 이전 표시값에서 새 값까지 0.6초 이징으로 굴러간다.
+ *  숨김 탭(rAF 정지)에서는 즉시 스냅해 값이 뒤처지지 않는다.
+ *  format 이 소수·단위를 결정한다 (기본: 정수 반올림).
+ */
+export const AnimatedNumber = ({ value, format = (v) => Math.round(v).toLocaleString(), durationMs = 600 }) => {
+  const [shown, setShown] = useState(value);
+  const fromRef = useRef(value);
+  useEffect(() => {
+    const from = fromRef.current;
+    if (from === value) return undefined;
+    if (typeof document !== 'undefined' && document.hidden) {
+      fromRef.current = value;
+      setShown(value);
+      return undefined;
+    }
+    let raf;
+    const t0 = performance.now();
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / durationMs);
+      const eased = 1 - (1 - p) ** 3;
+      setShown(from + (value - from) * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else fromRef.current = value;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      fromRef.current = value;
+      setShown(value);
+    };
+  }, [value, durationMs]);
+  return <>{format(shown)}</>;
+};
 import { STATUS } from '../data/factoryAssets.js';
 import { assetUrl } from '../lib/baseUrl.js';
 
@@ -81,7 +116,7 @@ export const HintTip = ({ hint, theme }) => {
             role="tooltip"
             /* 패널과 확실히 구분되는 반전(다크) 말풍선 — 라이트/다크 테마 어디서나 대비가 선다.
                z-[90]: 사이드바(z-20)·모달(z-50) 위, 튜토리얼 오버레이(z-100) 아래 */
-            className="fixed z-[90] -translate-x-1/2 rounded-lg border border-slate-600/50 bg-slate-900/95
+            className="anim-drop-centered fixed z-[90] -translate-x-1/2 rounded-lg border border-slate-600/50 bg-slate-900/95
               px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-xl shadow-black/30 backdrop-blur-sm"
             style={{ left: pos.x, top: pos.top, bottom: pos.bottom, width: TOOLTIP_W }}
           >
@@ -153,11 +188,11 @@ export const ConsumableBar = ({ label, percent, theme }) => {
   );
 };
 
-/** 모달 공통 셸 */
+/** 모달 공통 셸 — 등장 시 팝 인 */
 export const Modal = ({ theme, onClose, children, className = 'w-[460px]' }) => (
   <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
     <div
-      className={`${className} max-h-full overflow-hidden rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl`}
+      className={`anim-pop ${className} max-h-full overflow-hidden rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl`}
       onClick={(e) => e.stopPropagation()}
     >
       {children}

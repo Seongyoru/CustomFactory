@@ -215,7 +215,7 @@ const TopGnb = ({
 
         {menuOpen && (
           <div
-            className={`absolute right-0 top-full mt-1.5 w-48 rounded-lg border ${theme.panelBorder}
+            className={`anim-drop absolute right-0 top-full mt-1.5 w-48 rounded-lg border ${theme.panelBorder}
               ${theme.headerBg} shadow-2xl overflow-hidden z-50`}
           >
             <div className={`px-3 py-2.5 border-b ${theme.divider}`}>

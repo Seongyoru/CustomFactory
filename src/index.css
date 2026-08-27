@@ -47,6 +47,58 @@ body {
   }
 }
 
+/* -----------------------------------------------------------------------
+ * 마이크로 인터랙션 — 모달·드롭다운 등장, KPI 펄스, 종 흔들림
+ * 관제 화면의 '살아있음'은 대부분 이 작은 모션들에서 나온다.
+ * --------------------------------------------------------------------- */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.anim-pop { animation: pop-in 0.18s ease-out; }
+
+@keyframes drop-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: none; }
+}
+.anim-drop { animation: drop-in 0.15s ease-out; }
+
+/* 가로 센터링(-translate-x-1/2)을 유지해야 하는 요소용 — 애니메이션이 transform 을
+   덮어쓰므로 translateX(-50%) 를 키프레임 안에 함께 넣는다 */
+@keyframes drop-in-centered {
+  from { opacity: 0; transform: translate(-50%, -5px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.anim-drop-centered { animation: drop-in-centered 0.15s ease-out; }
+
+/* 값이 바뀌는 순간의 펄스 — key 를 값으로 걸어 리마운트로 발화시킨다 */
+@keyframes stat-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+.anim-stat { display: inline-block; animation: stat-pop 0.45s ease-out; }
+
+@keyframes bell-ring {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-11deg); }
+  60% { transform: rotate(7deg); }
+  80% { transform: rotate(-4deg); }
+}
+.anim-bell { animation: bell-ring 0.6s ease-in-out; transform-origin: top center; }
+
+/* 로그인 배경 — 포인트 컬러 광원이 천천히 떠다니는 그라데이션 메시 */
+@keyframes blob-drift {
+  from { transform: translate(-6%, -5%) scale(1); }
+  to { transform: translate(6%, 7%) scale(1.18); }
+}
+.login-blob { animation: blob-drift 16s ease-in-out infinite alternate; }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-pop, .anim-drop, .anim-drop-centered, .anim-stat, .anim-bell, .login-blob { animation: none; }
+}
+
 /* 다크 UI 에 맞춘 얇은 스크롤바 */
 ::-webkit-scrollbar {
   width: 6px;

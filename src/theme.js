@@ -11,9 +11,11 @@
  * ---------------------------------------------------------------------------
  */
 
+/* 다크 = 관제센터 무드 — 딥 네이비 바탕 + 포인트 컬러의 은은한 발광.
+   순수 슬레이트 그레이보다 반 톤 푸른 배경이 '모니터링 룸' 인상을 만든다. */
 const DARK_BASE = {
   appearance: 'dark',
-  appBg: 'bg-slate-950',
+  appBg: 'bg-[#04070f]',
   textPrimary: 'text-slate-100',
   textSecondary: 'text-slate-300',
   textMuted: 'text-slate-400',
@@ -71,26 +73,27 @@ export const THEMES = {
     operation: {
       ...DARK_BASE,
       label: '운전 모드',
-      headerBg: 'bg-slate-900',
-      panelBg: 'bg-slate-900/80',
-      panelBorder: 'border-slate-700/80',
+      headerBg: 'bg-[#0a1322]',
+      panelBg: 'bg-[#0b1526]/85',
+      panelBorder: 'border-[#24405f]/70',
       accentText: 'text-sky-400',
       accentBg: 'bg-sky-500',
       accentBgSoft: 'bg-sky-500/10',
       accentRing: 'focus:ring-sky-500/60',
       barFrom: 'from-sky-500',
       barTo: 'to-cyan-400',
-      glow: 'shadow-[0_0_0_1px_rgba(148,163,184,0.15)]',
-      chip: 'bg-slate-800 text-slate-300 border-slate-700',
+      /* 핵심 패널에 포인트 컬러가 은은히 번지는 발광 — 관제 화면의 '전원 켜짐' 감각 */
+      glow: 'shadow-[0_0_26px_-8px_rgba(56,189,248,0.35),0_0_0_1px_rgba(56,189,248,0.10)]',
+      chip: 'bg-[#0e1b30] text-slate-300 border-[#24405f]',
       frameRing: 'ring-transparent',
       accentHex: '#38bdf8',
     },
     simulation: {
       ...DARK_BASE,
       label: '시뮬레이션 모드',
-      headerBg: 'bg-[#160f22]',
-      panelBg: 'bg-[#160f22]/85',
-      panelBorder: 'border-fuchsia-500/40',
+      headerBg: 'bg-[#140d24]',
+      panelBg: 'bg-[#150e26]/85',
+      panelBorder: 'border-fuchsia-500/35',
       accentText: 'text-fuchsia-400',
       accentBg: 'bg-fuchsia-500',
       accentBgSoft: 'bg-fuchsia-500/10',

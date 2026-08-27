@@ -12,7 +12,7 @@ import { SIM_ASSUMPTIONS, probabilityBefore, simulateLine } from '../../lib/line
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
-import { GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
+import { AnimatedNumber, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 
 /**
  * 실린더 충전 게이지 — 1세트마다 1칸씩 차고, 가득 차면 반출 후 새 실린더로 비워진다.
@@ -191,7 +191,8 @@ const LeftDashboardPanel = ({
           <div className="flex items-end justify-between">
             <div className="min-w-0">
               <p className={`text-3xl font-bold tabular-nums leading-none ${theme.textPrimary}`}>
-                {progress.toFixed(0)}<span className={`text-base ml-0.5 ${theme.textMuted}`}>%</span>
+                <AnimatedNumber value={progress} format={(v) => v.toFixed(0)} />
+                <span className={`text-base ml-0.5 ${theme.textMuted}`}>%</span>
               </p>
               <p className={`mt-1 truncate text-[11px] ${theme.textFaint}`}>
                 현재 로트 · {currentJob ? `${currentJob.name} (${currentJob.id})` : '-'}
@@ -217,10 +218,10 @@ const LeftDashboardPanel = ({
 
           <div className={`grid grid-cols-4 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
             {[
-              ['대기 물량', `${targetQty}`],
-              ['진행', `${doneQty}`],
-              /* 완료 작업의 누적 — 작업이 끝날 때마다 점프해서 배속 효과가 눈에 띈다 */
-              ['금일 생산', `${todayQty}`],
+              ['대기 물량', <AnimatedNumber key="t" value={targetQty} />],
+              ['진행', <AnimatedNumber key="d" value={doneQty} />],
+              /* 완료 누적 — 로트가 끝나는 순간 카운트업 + 펄스로 점프가 눈에 띈다 */
+              ['금일 생산', <span key={`q-${todayQty}`} className="anim-stat"><AnimatedNumber value={todayQty} /></span>],
               ['완료 예정', finishAt],
             ].map(([k, v], i) => (
               <div key={k}>

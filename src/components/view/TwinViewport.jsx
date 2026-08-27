@@ -16,6 +16,7 @@ import {
   fmtAnimScale, fmtClock, fmtDate, fmtDuration, fmtSec, fmtSpeed,
 } from '../../lib/format.js';
 import CctvVideo from '../CctvVideo.jsx';
+import { usePersistentState } from '../../lib/persist.js';
 
 /**
  * 공정 시퀀스 HUD 가 4Hz 로 갱신되는데, 그때마다 3D 트리까지 재조정되면 낭비다.
@@ -116,6 +117,8 @@ const TwinViewport = ({
   const [showShell, setShowShell] = useState(true);
   const [shellOpacity, setShellOpacity] = useState(0.5);
   const [viewPanelOpen, setViewPanelOpen] = useState(false);
+  /* 글로우 효과(블룸·비네트, 다크 전용) — 저사양에서 끌 수 있게 저장한다 */
+  const [sceneFx, setSceneFx] = usePersistentState('ui.sceneFx', true);
 
   /* 홈 시점은 라인 1호기 기준이라, 선택된 라인 원점만큼 밀어서 되돌린다 */
   const resetCamera = () => {
@@ -174,6 +177,7 @@ const TwinViewport = ({
           dischargedByLine={dischargedByLine}
           theme={theme}
           controlsRef={controlsRef}
+          fxEnabled={sceneFx}
         />
 
         {/* --- 선택 시 상단 중앙에 뜨는 이동 피벗 리드아웃 --- */}
@@ -308,6 +312,26 @@ const TwinViewport = ({
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* 글로우 효과(블룸·비네트) — 다크 테마 전용, 저사양이면 끈다 */}
+            <div className={`mt-3 pt-3 border-t ${theme.divider} flex items-center justify-between`}>
+              <span className={`text-[11px] ${theme.textMuted}`}>
+                글로우 효과
+                <span className={`ml-1 text-[9px] ${theme.textGhost}`}>다크 전용</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSceneFx((v) => !v)}
+                className={`relative w-9 h-5 rounded-full transition-colors
+                  ${sceneFx ? theme.accentBg : theme.trackBg}`}
+                aria-label="글로우 효과"
+              >
+                <span
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all
+                    ${sceneFx ? 'left-[18px]' : 'left-0.5'}`}
+                />
+              </button>
             </div>
           </div>
         )}

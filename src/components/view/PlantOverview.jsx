@@ -12,6 +12,29 @@ import {
 } from 'lucide-react';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
 import { fmtClock, fmtDate } from '../../lib/format.js';
+import { AnimatedNumber } from '../ui.jsx';
+
+/** OEE 반원 게이지 — 값이 바뀌면 호가 부드럽게 따라온다 */
+const MiniGauge = ({ theme, value }) => {
+  const R = 15;
+  const C = Math.PI * R; // 반원 둘레
+  const p = value == null ? 0 : Math.max(0, Math.min(1, value));
+  return (
+    <svg viewBox="0 0 40 22" className="w-10 h-[22px] mx-auto" aria-hidden>
+      <path d="M 5 20 A 15 15 0 0 1 35 20" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="4" strokeLinecap="round" />
+      <path
+        d="M 5 20 A 15 15 0 0 1 35 20"
+        fill="none"
+        stroke={theme.accentHex}
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeDasharray={C}
+        strokeDashoffset={C * (1 - p)}
+        style={{ transition: 'stroke-dashoffset 700ms ease' }}
+      />
+    </svg>
+  );
+};
 
 /** 시간대별 생산 스파크라인 — 최근 8시간, 숫자 대신 '흐름'을 보여준다 */
 const Spark = ({ theme, values }) => {
@@ -92,7 +115,7 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
         {/* 공장 합계 밴드 */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            ['금일 총생산', todayTotal > 0 ? `${todayTotal} EA` : '—', false],
+            ['금일 총생산', todayTotal > 0 ? <><AnimatedNumber value={todayTotal} /> EA</> : '—', false],
             ['평균 OEE', pct(avgOee), false],
             ['활성 알람', `${alarmTotal}건`, alarmTotal > 0],
             ['소모품 위험 (≤15%)', `${riskyTotal}건`, riskyTotal > 0],
@@ -146,7 +169,7 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
                     </span>
                     {d.head && (
                       <span className={`shrink-0 font-bold tabular-nums ${theme.textPrimary}`}>
-                        {Math.round(d.progress)}%
+                        <AnimatedNumber value={d.progress} format={(v) => `${Math.round(v)}%`} />
                       </span>
                     )}
                   </div>
@@ -207,10 +230,22 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
                   </span>
                 </div>
 
-                {/* 지표 */}
+                {/* 지표 — OEE 는 반원 게이지로 */}
                 <div className="grid grid-cols-4 gap-1.5">
-                  <Stat theme={theme} label="금일 생산" value={d.todayQty > 0 ? `${d.todayQty}` : '—'} />
-                  <Stat theme={theme} label="OEE" value={pct(d.oee)} />
+                  <Stat
+                    theme={theme}
+                    label="금일 생산"
+                    value={d.todayQty > 0 ? <AnimatedNumber value={d.todayQty} /> : '—'}
+                  />
+                  <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2.5 py-2 text-center`}>
+                    <p className={`text-[10px] ${theme.textFaint}`}>OEE</p>
+                    <div className="relative mt-0.5">
+                      <MiniGauge theme={theme} value={d.oee} />
+                      <p className={`absolute inset-x-0 bottom-0 text-[10px] font-bold tabular-nums ${theme.textPrimary}`}>
+                        {pct(d.oee)}
+                      </p>
+                    </div>
+                  </div>
                   <Stat theme={theme} label="가동률" value={pct(d.availability)} />
                   <Stat
                     theme={theme}

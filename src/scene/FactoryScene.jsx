@@ -20,6 +20,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Grid, Html, OrbitControls, TransformControls, useGLTF, useProgress } from '@react-three/drei';
+import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import {
   ANIMATION_CLIP,
@@ -495,6 +496,39 @@ function StaticModel({ asset, offset, clock, opacity = 1 }) {
  */
 /* 오류 설비 없음의 고정 참조 — 매 렌더 새 배열로 memo 를 깨지 않게 */
 const EMPTY_FAULTS = [];
+
+/**
+ * 활성 라인 바닥 글로우 — "지금 보고 있는 라인"을 바닥의 은은한 광원으로 표시한다.
+ *  하드 엣지 사각형이 되지 않게 방사형 그라데이션 텍스처를 즉석 캔버스로 만든다.
+ */
+let glowTexture = null;
+const getGlowTexture = () => {
+  if (glowTexture) return glowTexture;
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 8, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(0.55, 'rgba(255,255,255,0.28)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+  glowTexture = new THREE.CanvasTexture(c);
+  return glowTexture;
+};
+
+const ActiveLineGlow = ({ origin, accentHex, isLight }) => (
+  <mesh rotation-x={-Math.PI / 2} position={[origin[0], 0.02, origin[2]]} renderOrder={-2}>
+    <planeGeometry args={[11, 14]} />
+    <meshBasicMaterial
+      map={getGlowTexture()}
+      color={accentHex}
+      transparent
+      opacity={isLight ? 0.14 : 0.22}
+      depthWrite={false}
+    />
+  </mesh>
+);
 function LineGroup({
   line, active, selectedId, onSelect, onMove, onDragChange, accentHex, offsets, clock,
   faultedAssetIds, stopped, registerObject,
@@ -844,6 +878,13 @@ function SceneContents({
 
       {showShell && <FactoryShell opacity={shellOpacity} />}
 
+      {/* 활성 라인 바닥 글로우 — 지금 조작 중인 라인이 바닥에서 은은히 빛난다 */}
+      <ActiveLineGlow
+        origin={(PRODUCTION_LINES.find((l) => l.id === activeLineId) ?? PRODUCTION_LINES[0]).origin}
+        accentHex={accentHex}
+        isLight={isLight}
+      />
+
       {PRODUCTION_LINES.map((line) => (
         <LineGroup
           key={line.id}
@@ -921,6 +962,7 @@ export default function FactoryScene({
   dischargedByLine = {},
   theme,
   controlsRef,
+  fxEnabled = true,
 }) {
   const isLight = theme.appearance === 'light';
   /* 기즈모 드래그로 끝난 포인터업이 '빈 공간 클릭'으로 오인돼 선택이 풀리는 것을 막는다 */
@@ -1011,6 +1053,19 @@ export default function FactoryScene({
           maxPolarAngle={Math.PI / 2.05}
           makeDefault
         />
+
+        {/* 글로우 효과 — 다크 테마 전용 (라이트는 밝은 배경이라 블룸·비네트가 얻는 게 없다).
+            컴포저는 투명 캔버스의 알파를 보존하지 못할 수 있어, 효과가 켜지면 씬 배경을
+            캔버스 안에서 단색으로 직접 칠한다 (CSS 그라데이션 대체). */}
+        {fxEnabled && !isLight && (
+          <>
+            <color attach="background" args={[theme.scene.bg]} />
+            <EffectComposer disableNormalPass multisampling={4}>
+              <Bloom mipmapBlur intensity={0.5} luminanceThreshold={0.72} luminanceSmoothing={0.18} />
+              <Vignette eskil={false} offset={0.22} darkness={0.5} />
+            </EffectComposer>
+          </>
+        )}
       </Canvas>
 
       <LoadingOverlay accentHex={theme.accentHex} isLight={isLight} />
