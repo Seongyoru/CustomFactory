@@ -56,7 +56,9 @@ import { useWallClock } from './hooks/useWallClock.js';
 import { useProductionEngine } from './hooks/useProductionEngine.js';
 import { useTelemetry } from './hooks/useTelemetry.js';
 import { useMaintenance } from './hooks/useMaintenance.js';
-import { consumableAlarmOf, withLiveConsumable, withMaintHistory } from './lib/maintenance.js';
+import {
+  CONSUMABLE_WARN_PCT, consumableAlarmOf, withLiveConsumable, withMaintHistory,
+} from './lib/maintenance.js';
 import { splitDefects } from './lib/quality.js';
 
 import TopGnb from './components/gnb/TopGnb.jsx';
@@ -141,6 +143,8 @@ export default function DigitalTwinDashboard() {
   const [plant, setPlant] = useState(PLANTS[0].id);
   /* 화면 뷰 — 'line': 선택된 라인의 3D 상세, 'overview': 전 라인 관제 */
   const [view, setView] = useState('line');
+  /* 키오스크 모드 — 벽면 TV 용: 풀스크린 + 관제↔라인 상세 자동 순환, 아무 조작으로 종료 */
+  const [kiosk, setKiosk] = useState(false);
   /* 대기열(로트)은 라인별로 완전히 분리된다. 품목 카탈로그(products)만 라인 공용이다.
      대기열·카탈로그·배치·메모·이력은 localStorage 에 저장되어 새로고침에도 유지된다. */
   const [jobsByLine, setJobsByLine] = usePersistentState('jobsByLine', INITIAL_JOBS_BY_LINE, reviveJobsByLine);
@@ -605,6 +609,53 @@ export default function DigitalTwinDashboard() {
   };
 
   /**
+   * 키오스크 모드 — 관제 → 라인 1 → 라인 2 → … 를 일정 간격으로 자동 순환한다.
+   *  아무 클릭/ESC/풀스크린 해제로 즉시 종료 (관람 전용이라 조작 = 종료가 예측 가능하다).
+   *  풀스크린 요청이 거부돼도(권한/브라우저) 순환 자체는 동작한다.
+   */
+  useEffect(() => {
+    if (!kiosk) return undefined;
+    const seq = ['overview', ...PLANTS.map((p) => p.id)];
+    let idx = 0;
+    const tick = setInterval(() => {
+      idx = (idx + 1) % seq.length;
+      const stop = seq[idx];
+      if (stop === 'overview') {
+        setView('overview');
+      } else {
+        setPlant(stop);
+        setSelectedId(null);
+        setSelectedJobId(null);
+        setView('line');
+      }
+    }, 12_000);
+    const exit = () => setKiosk(false);
+    const onKey = (e) => {
+      if (e.key === 'Escape') exit();
+    };
+    const onFsChange = () => {
+      if (!document.fullscreenElement) exit();
+    };
+    window.addEventListener('pointerdown', exit, true);
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener('pointerdown', exit, true);
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onFsChange);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, [kiosk]);
+
+  const handleStartKiosk = () => {
+    setView('overview');
+    setKiosk(true);
+    logEvent('KIOSK_STARTED', '키오스크 모드 시작 (관제 자동 순환)');
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  };
+
+  /**
    * 3D 기즈모 드래그가 끝날 때 한 번 호출된다.
    * 조작 가능한 것은 선택된 라인뿐이므로 그 라인의 배치에만 기록한다.
    * (씬 memo 유지를 위해 참조 고정 — plant 가 바뀔 때만 새로 만든다)
@@ -796,6 +847,8 @@ export default function DigitalTwinDashboard() {
    *  관제 뷰가 열려 있을 때만 계산한다 (매초 리렌더에서 불필요한 집계 방지).
    */
   const todayStr = fmtDate(new Date());
+  const nowMs = now.getTime();
+  const effSpeed = mode === 'simulation' ? speed : 1;
   const overviewData =
     view === 'overview'
       ? PLANTS.map((l) => {
@@ -803,8 +856,26 @@ export default function DigitalTwinDashboard() {
           const head = queue[0] ?? null;
           const lineElapsed = elapsedByLine[l.id] ?? 0;
           const doneEa = head ? completedEaAt(lineElapsed, head.qty, taktOf(head)) : 0;
+          /* 완료 예정 — 표준시간 잔여를 배속으로 나눈 벽시계. 정지 중엔 시계가 멈춰 무의미 */
+          const stopped = Boolean(eStopByLine[l.id]);
+          const headRemainSec = head ? Math.max(0, head.totalSec - lineElapsed) : 0;
+          const queueRemainSec =
+            headRemainSec + queue.slice(1).reduce((s, j) => s + j.totalSec, 0);
+          const finishHeadAt =
+            head && !stopped ? new Date(nowMs + (headRemainSec / effSpeed) * 1000) : null;
+          const finishQueueAt =
+            head && !stopped ? new Date(nowMs + (queueRemainSec / effSpeed) * 1000) : null;
+          /* 시간대별 생산 스파크라인 — 최근 8시간, 시간 단위 */
+          const hourStart = new Date(now);
+          hourStart.setMinutes(0, 0, 0);
+          const spark = Array.from({ length: 8 }, () => 0);
           const s = lineStats[l.id] ?? {};
           const lineProd = production.filter((p) => p.lineId === l.id);
+          lineProd.forEach((p) => {
+            const dt = new Date(p.finishedAt).getTime();
+            const binFromEnd = Math.floor((hourStart.getTime() + 3600_000 - dt) / 3600_000);
+            if (binFromEnd >= 0 && binFromEnd < 8) spark[7 - binFromEnd] += p.qty;
+          });
           const planned = lineProd.reduce((a, p) => a + (p.plannedSec ?? 0), 0);
           const actual = lineProd.reduce((a, p) => a + (p.actualSec ?? 0), 0);
           const denomA = (s.runSec ?? 0) + (s.downSec ?? 0);
@@ -824,13 +895,17 @@ export default function DigitalTwinDashboard() {
           return {
             lineId: l.id,
             name: l.name,
-            eStop: Boolean(eStopByLine[l.id]),
+            eStop: stopped,
             alarms: alarms.filter((a) => a.lineId === l.id),
             head,
             queueCount: queue.length,
             remainQty: queue.reduce((sum, j) => sum + j.qty, 0) - doneEa,
             progress: head ? Math.min(100, (lineElapsed / head.totalSec) * 100) : 0,
             doneEa,
+            finishHeadAt,
+            finishQueueAt,
+            nextLots: queue.slice(1, 3).map((j) => ({ id: j.id, name: j.name, qty: j.qty })),
+            spark,
             cylinder: cylinderOf(l.id),
             todayQty: lineProd
               .filter((p) => fmtDate(new Date(p.finishedAt)) === todayStr)
@@ -840,6 +915,9 @@ export default function DigitalTwinDashboard() {
             worstConsumable: worst
               ? { name: worst.nameKo, label: worst.consumable.label, percent: worst.consumable.percent }
               : null,
+            riskyCount: liveAssets.filter(
+              (a) => a.consumable && a.consumable.percent <= CONSUMABLE_WARN_PCT
+            ).length,
           };
         })
       : null;
@@ -898,7 +976,19 @@ export default function DigitalTwinDashboard() {
             handlePlantChange(lineId);
             setView('line');
           }}
+          onStartKiosk={handleStartKiosk}
+          kiosk={kiosk}
         />
+      )}
+
+      {/* 키오스크 안내 — 관람 전용 모드임과 나가는 방법을 조용히 알린다 */}
+      {kiosk && (
+        <div
+          className={`pointer-events-none fixed bottom-9 right-4 z-40 px-3 py-1.5 rounded-lg border
+            ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-sm text-[10px] font-semibold ${theme.textMuted}`}
+        >
+          키오스크 모드 · 화면 자동 순환 중 — 클릭하거나 ESC 로 종료
+        </div>
       )}
 
       <div className={`relative flex-1 min-h-0 ${view === 'overview' ? 'hidden' : 'flex'}`}>

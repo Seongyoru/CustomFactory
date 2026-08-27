@@ -8,10 +8,34 @@
  */
 import React from 'react';
 import {
-  Activity, AlertOctagon, ArrowRight, Factory, Gauge, Layers, Siren, Wrench,
+  Activity, AlertOctagon, ArrowRight, Clock, Factory, Gauge, Layers, Siren, Tv, Wrench,
 } from 'lucide-react';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
 import { fmtClock, fmtDate } from '../../lib/format.js';
+
+/** 시간대별 생산 스파크라인 — 최근 8시간, 숫자 대신 '흐름'을 보여준다 */
+const Spark = ({ theme, values }) => {
+  const max = Math.max(1, ...values);
+  const W = 96;
+  const H = 22;
+  const gap = 2;
+  const bw = (W - gap * (values.length - 1)) / values.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-24 h-[22px] shrink-0" aria-hidden>
+      {values.map((v, i) => {
+        const h = v === 0 ? 1.5 : Math.max(2.5, (v / max) * H);
+        return (
+          <rect
+            key={i}
+            x={i * (bw + gap)} y={H - h} width={bw} height={h} rx="1"
+            fill={theme.accentHex}
+            opacity={v === 0 ? 0.15 : 0.35 + 0.65 * (v / max)}
+          />
+        );
+      })}
+    </svg>
+  );
+};
 
 /* 카드 상태 — 심각한 순서: 정지 > 알람 > 소모품 위험 > 유휴 > 가동 */
 const cardStateOf = (d) => {
@@ -35,10 +59,15 @@ const Stat = ({ theme, label, value, warn = false }) => (
   </div>
 );
 
-const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
+const PlantOverview = ({ theme, data = [], now, onEnterLine, onStartKiosk, kiosk = false }) => {
   const running = data.filter((d) => d.head && !d.eStop).length;
   const stopped = data.filter((d) => d.eStop).length;
   const alarmTotal = data.reduce((s, d) => s + d.alarms.length, 0);
+  /* 공장 합계 — "오늘 공장이 어땠나"의 한 줄 답 */
+  const todayTotal = data.reduce((s, d) => s + d.todayQty, 0);
+  const oees = data.map((d) => d.oee).filter((v) => v != null);
+  const avgOee = oees.length > 0 ? oees.reduce((a, b) => a + b, 0) / oees.length : null;
+  const riskyTotal = data.reduce((s, d) => s + (d.riskyCount ?? 0), 0);
 
   return (
     <div className="relative flex-1 min-h-0 overflow-y-auto">
@@ -56,12 +85,41 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
             <span className="flex items-center gap-1.5">
               <AlertOctagon className="w-3.5 h-3.5 text-red-500" /> 정지 {stopped}
             </span>
-            <span className="flex items-center gap-1.5">
-              <Siren className={`w-3.5 h-3.5 ${alarmTotal > 0 ? 'text-red-500' : ''}`} /> 알람 {alarmTotal}
-            </span>
             <span>{fmtDate(now)} {fmtClock(now)}</span>
+            {/* 키오스크 — 벽면 TV 용 풀스크린 + 자동 순환 */}
+            {!kiosk && (
+              <button
+                type="button"
+                onClick={onStartKiosk}
+                title="풀스크린으로 전환하고 관제·라인 화면을 자동 순환합니다 (클릭/ESC 로 종료)"
+                className={`flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-semibold
+                  transition-colors focus:outline-none focus:ring-2 ${theme.accentRing}
+                  ${theme.panelBorder} ${theme.textSecondary} ${theme.hoverBg}`}
+              >
+                <Tv className="w-3.5 h-3.5" /> 키오스크 모드
+              </button>
+            )}
           </div>
         </header>
+
+        {/* 공장 합계 밴드 */}
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            ['금일 총생산', todayTotal > 0 ? `${todayTotal} EA` : '—', false],
+            ['평균 OEE', pct(avgOee), false],
+            ['활성 알람', `${alarmTotal}건`, alarmTotal > 0],
+            ['소모품 위험 (≤15%)', `${riskyTotal}건`, riskyTotal > 0],
+          ].map(([k, v, warn]) => (
+            <div
+              key={k}
+              className={`rounded-lg border px-3 py-2.5
+                ${warn ? 'border-red-500/40 bg-red-500/10' : `${theme.panelBorder} ${theme.subtleBg}`}`}
+            >
+              <p className={`text-[10px] ${warn ? 'text-red-500 font-semibold' : theme.textFaint}`}>{k}</p>
+              <p className={`mt-1 text-[17px] font-bold tabular-nums ${warn ? 'text-red-500' : theme.textPrimary}`}>{v}</p>
+            </div>
+          ))}
+        </div>
 
         {/* 라인 카드 그리드 */}
         <div className="grid grid-cols-2 gap-4">
@@ -117,6 +175,23 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
                       <Layers className="w-3 h-3" /> 대기 {d.queueCount}건 · 잔여 {Math.max(0, d.remainQty)} EA
                     </span>
                   </div>
+                  {/* 완료 예정 — 관제의 첫 질문 "언제 끝나?" 의 답 */}
+                  {d.head && (
+                    <p className={`mt-1 flex items-center gap-1 text-[10px] tabular-nums
+                      ${d.eStop ? 'text-red-500 font-semibold' : theme.textMuted}`}>
+                      <Clock className="w-3 h-3 shrink-0" />
+                      {d.eStop
+                        ? 'E-STOP 정지 중 — 재가동 시 예정 시각 갱신'
+                        : `현재 로트 완료 ~${fmtClock(d.finishHeadAt, false)}${
+                            d.queueCount > 1 ? ` · 대기열 소진 ~${fmtClock(d.finishQueueAt, false)}` : ''
+                          }`}
+                    </p>
+                  )}
+                  {d.nextLots?.length > 0 && (
+                    <p className={`mt-0.5 text-[10px] truncate ${theme.textGhost}`}>
+                      다음 로트: {d.nextLots.map((j) => `${j.name} ${j.qty} EA`).join(' → ')}
+                    </p>
+                  )}
                 </div>
 
                 {/* 실린더 게이지 */}
@@ -133,6 +208,15 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
                   </span>
                   <span className={`shrink-0 text-[10px] tabular-nums ${theme.textGhost}`}>
                     {d.cylinder.active ? `${d.cylinder.fill}/${d.cylinder.capacity}` : '—'} · 반출 {d.cylinder.discharged}
+                  </span>
+                </div>
+
+                {/* 생산 흐름 스파크라인 — 최근 8시간 */}
+                <div className="flex items-center gap-2">
+                  <span className={`w-10 shrink-0 text-[10px] ${theme.textFaint}`}>생산 8h</span>
+                  <Spark theme={theme} values={d.spark ?? []} />
+                  <span className={`flex-1 text-right text-[10px] tabular-nums ${theme.textGhost}`}>
+                    합계 {(d.spark ?? []).reduce((a, b) => a + b, 0)} EA
                   </span>
                 </div>
 
