@@ -266,6 +266,7 @@ const ReportModal = ({
   theme, production, events, lineStats, onClose, onResetData,
   simSnapshots = [], onDeleteSnapshot, canManageSnapshots = true,
   consumablePercents = {}, maintLog = [],
+  dailyTargetByLine = {}, kwhByLine = {}, handoverNotes = [],
   canExport = true, exportHint, canReset = true, resetHint,
 }) => {
   const [tab, setTab] = useState('production');
@@ -398,7 +399,10 @@ const ReportModal = ({
             type="button"
             disabled={!canExport}
             title={!canExport ? exportHint : undefined}
-            onClick={() => downloadReportWorkbook({ production, events, lineStats, oeeByLine, simSnapshots, maintRows, maintLog, maintKpis })}
+            onClick={() => downloadReportWorkbook({
+              production, events, lineStats, oeeByLine, simSnapshots, maintRows, maintLog, maintKpis,
+              dailyTargetByLine, kwhByLine, handoverNotes,
+            })}
             className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-bold text-white ${theme.accentBg}
               hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
           >
@@ -926,6 +930,10 @@ const ReportModal = ({
         maintKpis={maintKpis}
         maintLog={maintLog}
         alarmEvents={alarmEvents}
+        spc={spc}
+        dailyTargetByLine={dailyTargetByLine}
+        kwhByLine={kwhByLine}
+        handoverNotes={handoverNotes}
       />
     </Modal>
   );

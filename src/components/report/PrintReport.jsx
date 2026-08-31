@@ -13,6 +13,8 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { PRODUCTION_LINES, findAsset } from '../../data/factoryAssets.js';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
+import { CO2_KG_PER_KWH } from '../../lib/energy.js';
+import { shiftOf } from '../../lib/shift.js';
 import { defectPareto } from '../../lib/quality.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration } from '../../lib/format.js';
 import { eventLabel } from '../../lib/events.js';
@@ -31,12 +33,20 @@ const S = {
 const Th = ({ children }) => <th style={S.th}>{children}</th>;
 const Td = ({ children, style }) => <td style={{ ...S.td, ...style }}>{children}</td>;
 
-const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintKpis, maintLog, alarmEvents }) => {
+const PrintReport = ({
+  kpis, oeeByLine, lineStats, production, maintRows, maintKpis, maintLog, alarmEvents,
+  spc = { rows: [], mean: 0, ucl: 0 }, dailyTargetByLine = {}, kwhByLine = {}, handoverNotes = [],
+}) => {
   const now = new Date();
   const today = fmtDate(now);
+  const shift = shiftOf(now);
   const todayProd = production.filter((p) => fmtDate(new Date(p.finishedAt)) === today);
   const todayAlarms = alarmEvents.filter((e) => fmtDate(new Date(e.at)) === today);
   const pareto = defectPareto(production);
+  const todayQtyTotal = todayProd.reduce((a, p) => a + p.qty, 0);
+  const targetTotal = PRODUCTION_LINES.reduce((s, l) => s + (dailyTargetByLine[l.id] ?? 0), 0);
+  const kwhTotal = PRODUCTION_LINES.reduce((s, l) => s + (kwhByLine[l.id] ?? 0), 0);
+  const overUcl = spc.ucl > 0 ? spc.rows.filter((r) => r.rate > spc.ucl).length : 0;
 
   return createPortal(
     <div className="print-sheet" style={{ color: '#000', background: '#fff', fontFamily: 'inherit' }}>
@@ -45,7 +55,7 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
         <p style={{ fontSize: '10px', letterSpacing: '0.2em', fontWeight: 700 }}>EGIS FACTORY · DIGITAL TWIN</p>
         <h1 style={{ fontSize: '18px', fontWeight: 800, margin: '2px 0' }}>일일 생산·보전 보고서</h1>
         <p style={{ fontSize: '10px', ...S.muted }}>
-          기준 시각 {today} {fmtClock(now)} · 시뮬레이션 데이터 기반 데모 보고서
+          기준 시각 {today} {fmtClock(now)} · 현재 {shift.label} · 시뮬레이션 데이터 기반 데모 보고서
         </p>
       </div>
 
@@ -55,10 +65,11 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
         <tbody>
           <tr>
             {[
-              ['생산량', todayProd.reduce((a, p) => a + p.qty, 0) + ' EA'],
+              ['생산량', todayQtyTotal + ' EA'],
+              ['목표 달성', targetTotal > 0 ? `${Math.round((todayQtyTotal / targetTotal) * 100)}% (목표 ${targetTotal})` : '—'],
               ['완료 로트', todayProd.length + '건'],
               ['불량', todayProd.reduce((a, p) => a + p.defects, 0) + ' EA'],
-              ['계획 달성률', pct(kpis.achieve)],
+              ['금일 전력(모의)', `${kwhTotal.toFixed(1)} kWh · CO₂ ${(kwhTotal * CO2_KG_PER_KWH).toFixed(1)} kg`],
               ['금일 알람', kpis.alarms + '건'],
             ].map(([k, v]) => (
               <Td key={k}>
@@ -143,6 +154,14 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
             </tbody>
           </table>
         </>
+      )}
+
+      {/* 불량률 관리도 요약 — 차트 대신 종이에 맞는 요약 수치 */}
+      {spc.rows.length >= 2 && (
+        <p style={{ fontSize: '10px', margin: '4px 0 0', ...S.muted }}>
+          불량률 관리도(최근 {spc.rows.length}로트, p-차트 근사): 평균 {(spc.mean * 100).toFixed(2)}% ·
+          UCL {(spc.ucl * 100).toFixed(2)}% · 관리상한 초과 <b>{overUcl}로트</b>
+        </p>
       )}
 
       {/* 설비 보전 현황 */}
@@ -237,9 +256,32 @@ const PrintReport = ({ kpis, oeeByLine, lineStats, production, maintRows, maintK
         </>
       )}
 
+      {/* 교대 인수인계 (최근) */}
+      {handoverNotes.length > 0 && (
+        <>
+          <h2 style={S.h2}>교대 인수인계 (최근 {Math.min(5, handoverNotes.length)}건)</h2>
+          <table style={S.table}>
+            <thead>
+              <tr>{['작성 시각', '라인', '교대', '작성자', '내용'].map((h) => <Th key={h}>{h}</Th>)}</tr>
+            </thead>
+            <tbody>
+              {handoverNotes.slice(0, 5).map((n) => (
+                <tr key={n.id}>
+                  <Td>{fmtDate(new Date(n.at))} {fmtClock(new Date(n.at))}</Td>
+                  <Td>{lineName(n.lineId)}</Td>
+                  <Td>{n.shiftLabel}</Td>
+                  <Td>{n.user}</Td>
+                  <Td>{n.text}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
       <p style={{ marginTop: '12px', fontSize: '9px', ...S.muted }}>
         본 보고서는 EGIS Factory 디지털 트윈이 자동 생성했습니다. 수치는 시뮬레이션 기반이며
-        실설비 연동 시 동일 양식으로 실측치가 출력됩니다.
+        (에너지: 3상 380V·역률 0.85·국내 배출계수 근사 가정) 실설비 연동 시 동일 양식으로 실측치가 출력됩니다.
       </p>
     </div>,
     document.body

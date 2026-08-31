@@ -18,7 +18,7 @@ const HandoverPanel = ({ theme, notes = [], onAdd, canWrite = true, hint }) => {
   };
 
   return (
-    <Panel theme={theme}>
+    <Panel theme={theme} data-tour="handover">
       <PanelTitle
         icon={ClipboardList}
         title="교대 인수인계"

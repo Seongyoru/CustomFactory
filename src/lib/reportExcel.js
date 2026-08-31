@@ -15,6 +15,7 @@ const fmtIso = (iso) => {
 
 export async function downloadReportWorkbook({
   production, events, lineStats, oeeByLine, simSnapshots = [], maintRows = [], maintLog = [], maintKpis = [],
+  dailyTargetByLine = {}, kwhByLine = {}, handoverNotes = [],
 }) {
   /* xlsx 는 내보내기를 실제로 누를 때만 내려받는다 */
   const XLSX = await import('xlsx');
@@ -133,7 +134,35 @@ export async function downloadReportWorkbook({
     XLSX.utils.book_append_sheet(wb, wsReplace, '소모품 교체 이력');
   }
 
-  /* 6) 전체 이벤트 로그 */
+  /* 6) 라인 운영 요약 — 일일 목표·금일 에너지(모의) */
+  {
+    const CO2 = 0.4594; // kg/kWh — lib/energy.CO2_KG_PER_KWH 와 동일 (데모 가정)
+    const opRows = [
+      ['라인', '일일 목표(EA)', '금일 kWh(모의)', 'CO₂ 환산(kg)'],
+      ...PRODUCTION_LINES.map((l) => [
+        lineName(l.id),
+        dailyTargetByLine[l.id] ?? '',
+        +(kwhByLine[l.id] ?? 0).toFixed(2),
+        +((kwhByLine[l.id] ?? 0) * CO2).toFixed(2),
+      ]),
+    ];
+    const wsOp = XLSX.utils.aoa_to_sheet(opRows);
+    wsOp['!cols'] = opRows[0].map(() => ({ wch: 15 }));
+    XLSX.utils.book_append_sheet(wb, wsOp, '운영 요약');
+  }
+
+  /* 7) 교대 인수인계 */
+  if (handoverNotes.length > 0) {
+    const hoRows = [
+      ['작성 시각', '라인', '교대', '작성자', '내용'],
+      ...handoverNotes.map((n) => [fmtIso(n.at), lineName(n.lineId), n.shiftLabel, n.user ?? '-', n.text]),
+    ];
+    const wsHo = XLSX.utils.aoa_to_sheet(hoRows);
+    wsHo['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, wsHo, '인수인계');
+  }
+
+  /* 8) 전체 이벤트 로그 */
   const eventRows = [
     ['시각', '구분', '라인', '내용'],
     ...events.map((e) => [fmtIso(e.at), eventLabel(e.type), lineName(e.lineId), e.message]),

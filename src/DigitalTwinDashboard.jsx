@@ -1099,6 +1099,7 @@ export default function DigitalTwinDashboard() {
               (연결 실패 시 비관리자에게도 원인·조치 안내가 닿아야 한다) */}
           <button
             type="button"
+            data-tour="source"
             onClick={() => setSourceModal(true)}
             title={can('source.configure') ? '데이터 소스 설정' : PERMISSION_HINTS['source.configure']}
             className="flex items-center gap-1.5 hover:underline cursor-pointer"
@@ -1256,6 +1257,9 @@ export default function DigitalTwinDashboard() {
           simSnapshots={simSnapshots}
           consumablePercents={consumablePercents}
           maintLog={maintLog}
+          dailyTargetByLine={dailyTargetByLine}
+          kwhByLine={kwhByLine}
+          handoverNotes={handoverNotes}
           onDeleteSnapshot={handleDeleteSnapshot}
           canManageSnapshots={can('jobs.manage')}
           canExport={can('report.export')}
