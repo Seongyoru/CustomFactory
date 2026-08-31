@@ -1,6 +1,6 @@
 /** 품질 — 불량 유형 배분·파레토 집계 계약 검사 */
 import { describe, expect, it } from 'vitest';
-import { DEFECT_TYPES, defectPareto, splitDefects } from './quality.js';
+import { DEFECT_TYPES, defectPareto, defectRateSeries, splitDefects } from './quality.js';
 
 const seeded = (seed) => {
   let a = seed >>> 0;
@@ -56,5 +56,34 @@ describe('quality — defectPareto', () => {
     const { total, rows } = defectPareto([{ defects: 0, defectTypes: {} }]);
     expect(total).toBe(0);
     expect(rows).toEqual([]);
+  });
+});
+
+describe('quality — defectRateSeries (p-차트 근사)', () => {
+  const lot = (defects, qty = 100) => ({ id: `P${defects}`, qty, defects, finishedAt: 'x' });
+
+  it('시간순 정렬(저장은 최신순), 평균·UCL 산출', () => {
+    const production = [lot(4), lot(2), lot(0)]; // 최신 → 오래된
+    const { rows, mean, ucl, nbar } = defectRateSeries(production);
+    expect(rows.map((r) => r.rate)).toEqual([0, 0.02, 0.04]); // 오래된 것부터
+    expect(mean).toBeCloseTo(6 / 300, 10);
+    expect(nbar).toBe(100);
+    expect(ucl).toBeCloseTo(mean + 3 * Math.sqrt((mean * (1 - mean)) / 100), 10);
+    expect(ucl).toBeGreaterThan(mean);
+  });
+
+  it('불량 전무면 UCL 0 (관리도 무의미), 빈 실적이면 빈 시리즈', () => {
+    expect(defectRateSeries([lot(0), lot(0)]).ucl).toBe(0);
+    expect(defectRateSeries([]).rows).toEqual([]);
+  });
+
+  it('maxLots 만큼만 최근 로트를 본다', () => {
+    const many = Array.from({ length: 50 }, (_, i) => lot(i % 3));
+    expect(defectRateSeries(many, 30).rows).toHaveLength(30);
+  });
+
+  it('수량 0 로트(방어)는 제외한다', () => {
+    const { rows } = defectRateSeries([lot(1), { id: 'Z', qty: 0, defects: 0 }]);
+    expect(rows).toHaveLength(1);
   });
 });

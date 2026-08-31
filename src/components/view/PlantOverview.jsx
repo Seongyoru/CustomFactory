@@ -11,6 +11,8 @@ import {
   Activity, AlertOctagon, ArrowRight, Clock, Factory, Gauge, Layers, Siren, Wrench,
 } from 'lucide-react';
 import { CONSUMABLE_WARN_PCT } from '../../lib/maintenance.js';
+import { CO2_KG_PER_KWH } from '../../lib/energy.js';
+import { fmtShiftRemain, shiftOf, shiftRemainSec } from '../../lib/shift.js';
 import { fmtClock, fmtDate } from '../../lib/format.js';
 import { AnimatedNumber } from '../ui.jsx';
 
@@ -91,6 +93,9 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
   const oees = data.map((d) => d.oee).filter((v) => v != null);
   const avgOee = oees.length > 0 ? oees.reduce((a, b) => a + b, 0) / oees.length : null;
   const riskyTotal = data.reduce((s, d) => s + (d.riskyCount ?? 0), 0);
+  const targetTotal = data.reduce((s, d) => s + (d.dailyTarget ?? 0), 0);
+  const kwhTotal = data.reduce((s, d) => s + (d.kwhToday ?? 0), 0);
+  const shift = shiftOf(now);
 
   return (
     <div className="relative flex-1 min-h-0 overflow-y-auto">
@@ -108,18 +113,36 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
             <span className="flex items-center gap-1.5">
               <AlertOctagon className="w-3.5 h-3.5 text-red-500" /> 정지 {stopped}
             </span>
+            {/* 현재 교대 — 종료까지 남은 시간 */}
+            <span
+              className={`px-2 py-0.5 rounded border ${theme.chip}`}
+              title="2교대 (주간 08~20 / 야간 20~08)"
+            >
+              {shift.key === 'DAY' ? '☀' : '☾'} {shift.label} · {fmtShiftRemain(shiftRemainSec(now))}
+            </span>
             <span>{fmtDate(now)} {fmtClock(now)}</span>
           </div>
         </header>
 
         {/* 공장 합계 밴드 */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-5 gap-2">
           {[
-            ['금일 총생산', todayTotal > 0 ? <><AnimatedNumber value={todayTotal} /> EA</> : '—', false],
-            ['평균 OEE', pct(avgOee), false],
-            ['활성 알람', `${alarmTotal}건`, alarmTotal > 0],
-            ['소모품 위험 (≤15%)', `${riskyTotal}건`, riskyTotal > 0],
-          ].map(([k, v, warn]) => (
+            [
+              '금일 총생산',
+              todayTotal > 0 ? <><AnimatedNumber value={todayTotal} /> EA</> : '—',
+              false,
+              targetTotal > 0 ? `목표 ${targetTotal} EA · 달성 ${Math.round((todayTotal / targetTotal) * 100)}%` : null,
+            ],
+            ['평균 OEE', pct(avgOee), false, null],
+            [
+              '금일 전력 (모의)',
+              kwhTotal > 0 ? `${kwhTotal.toFixed(1)} kWh` : '—',
+              false,
+              kwhTotal > 0 ? `CO₂ 약 ${(kwhTotal * CO2_KG_PER_KWH).toFixed(1)} kg` : null,
+            ],
+            ['활성 알람', `${alarmTotal}건`, alarmTotal > 0, null],
+            ['소모품 위험 (≤15%)', `${riskyTotal}건`, riskyTotal > 0, null],
+          ].map(([k, v, warn, sub]) => (
             <div
               key={k}
               className={`rounded-lg border px-3 py-2.5
@@ -127,6 +150,7 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
             >
               <p className={`text-[10px] ${warn ? 'text-red-500 font-semibold' : theme.textFaint}`}>{k}</p>
               <p className={`mt-1 text-[17px] font-bold tabular-nums ${warn ? 'text-red-500' : theme.textPrimary}`}>{v}</p>
+              {sub && <p className={`mt-0.5 text-[9px] tabular-nums ${theme.textFaint}`}>{sub}</p>}
             </div>
           ))}
         </div>
@@ -229,6 +253,15 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
                     합계 {(d.spark ?? []).reduce((a, b) => a + b, 0)} EA
                   </span>
                 </div>
+
+                {/* 에너지(모의) — 설비 전류에서 유도한 전력·금일 사용량 */}
+                <p
+                  className={`text-[10px] tabular-nums ${theme.textGhost}`}
+                  title="설비 전류에서 유도한 모의 값 (3상 380V · 역률 0.85 · 국내 배출계수 근사)"
+                >
+                  ⚡ 전력 {(d.kw ?? 0).toFixed(1)} kW · 금일 {(d.kwhToday ?? 0).toFixed(1)} kWh
+                  · CO₂ {((d.kwhToday ?? 0) * CO2_KG_PER_KWH).toFixed(1)} kg
+                </p>
 
                 {/* 지표 — OEE 는 반원 게이지로 */}
                 <div className="grid grid-cols-4 gap-1.5">

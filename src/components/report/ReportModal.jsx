@@ -21,7 +21,7 @@ import {
   CONSUMABLE_WARN_PCT, consumablePercentOf, daysUntil, maintenanceKpis, remainingEaOf,
 } from '../../lib/maintenance.js';
 import PrintReport from './PrintReport.jsx';
-import { defectPareto } from '../../lib/quality.js';
+import { defectPareto, defectRateSeries } from '../../lib/quality.js';
 import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
@@ -194,6 +194,56 @@ const ParetoChart = ({ theme, pareto }) => {
   );
 };
 
+/**
+ * 불량률 관리도(p-차트 근사) — 로트별 불량률 런차트 + 평균선 + 관리상한(UCL).
+ *  파레토가 "어떤 불량이 많은가"라면, 이 차트는 "언제부터 공정이 흔들렸나"에 답한다.
+ *  UCL 을 넘는 점은 적색으로 강조된다.
+ */
+const SpcChart = ({ theme, spc }) => {
+  const { rows, mean, ucl } = spc;
+  const W = 480;
+  const H = 120;
+  const plotH = 96;
+  const yMax = Math.max(ucl, ...rows.map((r) => r.rate)) * 1.25 || 0.01;
+  const yOf = (v) => plotH - (v / yMax) * plotH;
+  const xOf = (i) => (rows.length > 1 ? 12 + (i * (W - 24)) / (rows.length - 1) : W / 2);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="불량률 관리도">
+      <line x1="0" x2={W} y1={plotH} y2={plotH} stroke="currentColor" strokeWidth="0.7" opacity="0.25" />
+      {/* 평균선 · 관리상한 */}
+      <line x1="0" x2={W} y1={yOf(mean)} y2={yOf(mean)} stroke={theme.accentHex} strokeWidth="0.8" opacity="0.5" />
+      <text x={W - 4} y={yOf(mean) - 3} textAnchor="end" fontSize="8" fill={theme.accentHex} opacity="0.8">
+        평균 {(mean * 100).toFixed(2)}%
+      </text>
+      {ucl > 0 && (
+        <>
+          <line x1="0" x2={W} y1={yOf(ucl)} y2={yOf(ucl)} stroke="#ef4444" strokeWidth="0.8" strokeDasharray="4 3" opacity="0.7" />
+          <text x={W - 4} y={yOf(ucl) - 3} textAnchor="end" fontSize="8" fill="#ef4444" opacity="0.9">
+            UCL {(ucl * 100).toFixed(2)}%
+          </text>
+        </>
+      )}
+      {/* 런 라인 + 점 */}
+      <polyline
+        points={rows.map((r, i) => `${xOf(i)},${yOf(r.rate)}`).join(' ')}
+        fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.45"
+      />
+      {rows.map((r, i) => {
+        const over = ucl > 0 && r.rate > ucl;
+        return (
+          <circle key={`${r.id}-${i}`} cx={xOf(i)} cy={yOf(r.rate)} r={over ? 3 : 2.2}
+            fill={over ? '#ef4444' : theme.accentHex}>
+            <title>{`${r.id} (${lineName(r.lineId)}) · ${r.qty} EA · 불량률 ${(r.rate * 100).toFixed(2)}%${over ? ' — 관리상한 초과' : ''}`}</title>
+          </circle>
+        );
+      })}
+      <text x="4" y={H - 6} fontSize="8" fill="currentColor" opacity="0.4">← 과거</text>
+      <text x={W - 4} y={H - 6} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.4">최근 →</text>
+    </svg>
+  );
+};
+
 /** OEE 지표 바 한 줄 */
 const OeeBar = ({ theme, label, value, strong = false }) => (
   <div className="flex items-center gap-2">
@@ -307,6 +357,8 @@ const ReportModal = ({
 
   /* 품질 파레토 — 누적 실적의 불량 유형 분포 */
   const pareto = useMemo(() => defectPareto(production), [production]);
+  /* 불량률 관리도 — 최근 30로트의 p-차트 근사 */
+  const spc = useMemo(() => defectRateSeries(production, 30), [production]);
 
   const tabs = [
     { key: 'production', label: '생산 리포트', icon: BarChart3 },
@@ -442,6 +494,22 @@ const ReportModal = ({
                   </p>
                 </div>
                 <ParetoChart theme={theme} pareto={pareto} />
+              </section>
+            )}
+
+            {/* 불량률 관리도 — 로트가 2건은 있어야 추이가 된다 */}
+            {spc.rows.length >= 2 && (
+              <section className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} p-3 ${theme.textSecondary}`}>
+                <div className="flex items-baseline justify-between mb-2">
+                  <p className={`text-[11px] font-bold ${theme.textMuted}`}>
+                    불량률 관리도 — 최근 {spc.rows.length}로트 (p-차트 근사)
+                  </p>
+                  <p className={`text-[9px] ${theme.textFaint}`}>
+                    UCL = p̄ + 3√(p̄(1−p̄)/n̄) · 평균 로트 {Math.round(spc.nbar)} EA 기준 근사 ·
+                    <span className="text-red-500"> 적색 점</span> = 관리상한 초과
+                  </p>
+                </div>
+                <SpcChart theme={theme} spc={spc} />
               </section>
             )}
 

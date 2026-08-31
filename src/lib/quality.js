@@ -32,6 +32,38 @@ export const splitDefects = (total, rng = Math.random) => {
 };
 
 /**
+ * 불량률 관리도(p-차트 근사) — "언제부터 이상해졌나"에 답한다.
+ *  최근 로트들을 시간순으로 놓고 로트별 불량률, 전체 평균(p̄),
+ *  관리상한 UCL = p̄ + 3√(p̄(1-p̄)/n̄) (n̄ = 평균 로트 크기)을 돌려준다.
+ *  로트 크기가 제각각이라 정식 p-차트의 가변 한계 대신 평균 크기 근사를 쓴다
+ *  — 데모 수준의 정직한 단순화이며, 화면에 근사임을 표기한다.
+ */
+export const defectRateSeries = (production, maxLots = 30) => {
+  const lots = (production ?? [])
+    .filter((p) => p.qty > 0)
+    .slice(0, maxLots)
+    .reverse(); // 저장은 최신순 → 차트는 시간순
+  if (lots.length === 0) return { rows: [], mean: 0, ucl: 0, nbar: 0 };
+  const totalQty = lots.reduce((s, p) => s + p.qty, 0);
+  const totalDef = lots.reduce((s, p) => s + (p.defects ?? 0), 0);
+  const mean = totalDef / totalQty;
+  const nbar = totalQty / lots.length;
+  const ucl = mean === 0 ? 0 : mean + 3 * Math.sqrt((mean * (1 - mean)) / nbar);
+  return {
+    rows: lots.map((p) => ({
+      id: p.jobId ?? p.id,
+      lineId: p.lineId,
+      at: p.finishedAt,
+      qty: p.qty,
+      rate: (p.defects ?? 0) / p.qty,
+    })),
+    mean,
+    ucl,
+    nbar,
+  };
+};
+
+/**
  * 생산 실적 → 파레토 행 (빈도 내림차순, share 점유율, cum 누적 점유율).
  *  defectTypes 가 없는 과거 실적의 불량은 '유형 미기록' 한 줄로 모은다.
  */

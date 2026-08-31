@@ -13,6 +13,8 @@ import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
 import { AnimatedNumber, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
+import { fmtShiftRemain, shiftOf, shiftRemainSec } from '../../lib/shift.js';
+import HandoverPanel from './HandoverPanel.jsx';
 
 /**
  * 실린더 충전 게이지 — 1세트마다 1칸씩 차고, 가득 차면 반출 후 새 실린더로 비워진다.
@@ -45,9 +47,14 @@ const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
   selectedJobId, onSelectJob, onReorderJobs, onApplyOrder, onSaveSnapshot,
   speed, onSpeedChange, currentJob, elapsed, now, taktSec, animTimeScale, eStopEngaged,
-  todayQty = 0, cylinder, lineAssets,
+  todayQty = 0, cylinder, lineAssets, lineId,
   canManageJobs = true, manageHint,
+  dailyTarget = 0, onSetDailyTarget,
+  handoverNotes = [], onAddHandover, canWriteHandover = true, handoverHint,
 }) => {
+  /* 일일 목표 인라인 편집 (생산 계획 권한) */
+  const [targetEdit, setTargetEdit] = useState(null); // null=보기, 문자열=편집 중
+  const shift = shiftOf(now);
   /* 저장된 결과 표시 — 같은 결과를 두 번 저장하지 않게 앵커로 구분 */
   const [savedAnchor, setSavedAnchor] = useState(null);
   const progress = currentJob ? Math.min(100, (elapsed / currentJob.totalSec) * 100) : 0;
@@ -183,7 +190,13 @@ const LeftDashboardPanel = ({
                 ×{fmtSpeed(speed)} 가속
               </span>
             ) : (
-              <span className={`text-[10px] px-2 py-0.5 rounded border ${theme.chip}`}>DAY SHIFT</span>
+              /* 교대 실동작 — 지금이 어느 조인지 · 교대 종료까지 얼마나 남았는지 */
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded border tabular-nums ${theme.chip}`}
+                title={`${shift.label} 종료까지 ${fmtShiftRemain(shiftRemainSec(now))} 남음 (2교대 · 08~20/20~08)`}
+              >
+                {shift.key === 'DAY' ? '☀' : '☾'} {shift.label} · {fmtShiftRemain(shiftRemainSec(now))}
+              </span>
             )
           }
         />
@@ -231,6 +244,61 @@ const LeftDashboardPanel = ({
                 </p>
               </div>
             ))}
+          </div>
+
+          {/* 일일 목표 대비 달성 — "오늘 얼마나 왔나"의 분모. 목표는 관리 권한이 인라인 수정 */}
+          <div>
+            <div className="flex items-center justify-between text-[10px]">
+              <span className={theme.textFaint}>일일 목표 대비</span>
+              {targetEdit === null ? (
+                <button
+                  type="button"
+                  disabled={!canManageJobs}
+                  title={canManageJobs ? '클릭해서 일일 목표 수량을 수정합니다' : manageHint}
+                  onClick={() => setTargetEdit(String(dailyTarget))}
+                  className={`tabular-nums ${theme.textMuted} ${canManageJobs ? 'hover:underline cursor-pointer' : 'cursor-default'}`}
+                >
+                  목표 {dailyTarget} EA{canManageJobs ? ' ✎' : ''}
+                </button>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={targetEdit}
+                    onChange={(e) => setTargetEdit(e.target.value.replace(/\D/g, ''))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        onSetDailyTarget?.(Number(targetEdit));
+                        setTargetEdit(null);
+                      }
+                      if (e.key === 'Escape') setTargetEdit(null);
+                    }}
+                    onBlur={() => {
+                      onSetDailyTarget?.(Number(targetEdit));
+                      setTargetEdit(null);
+                    }}
+                    className={`w-16 h-5 px-1.5 rounded border text-right text-[10px] tabular-nums
+                      ${theme.panelBorder} ${theme.inputBg} ${theme.textPrimary} focus:outline-none focus:ring-1 ${theme.accentRing}`}
+                  />
+                  <span className={theme.textFaint}>EA</span>
+                </span>
+              )}
+            </div>
+            <div className={`mt-1 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
+              <div
+                className={`h-full rounded-full bg-gradient-to-r ${theme.barFrom} ${theme.barTo}`}
+                style={{
+                  width: `${dailyTarget > 0 ? Math.min(100, (todayQty / dailyTarget) * 100) : 0}%`,
+                  transition: 'width 700ms ease',
+                }}
+              />
+            </div>
+            <p className={`mt-0.5 text-right text-[10px] tabular-nums
+              ${dailyTarget > 0 && todayQty >= dailyTarget ? 'text-emerald-500 font-semibold' : theme.textGhost}`}>
+              {dailyTarget > 0
+                ? `달성 ${Math.round((todayQty / dailyTarget) * 100)}%${todayQty >= dailyTarget ? ' — 목표 달성 🎉' : ''}`
+                : '목표 미설정'}
+            </p>
           </div>
 
           {/* 단계별(개포장/이송/충전/검사) 집계는 두지 않는다 — 1세트 단위 흐름 공정.
@@ -674,6 +742,17 @@ const LeftDashboardPanel = ({
           </div>
         </div>
       </Panel>
+
+      {/* 교대 인수인계 — key 로 라인 전환 시 리마운트: 쓰다 만 초안이 다른 라인
+          선택 상태에서 저장돼 엉뚱한 라인으로 귀속되는 것을 막는다 */}
+      <HandoverPanel
+        key={lineId}
+        theme={theme}
+        notes={handoverNotes}
+        onAdd={onAddHandover}
+        canWrite={canWriteHandover}
+        hint={handoverHint}
+      />
     </aside>
   );
 };

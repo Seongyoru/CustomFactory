@@ -31,6 +31,8 @@ export const EVENT_TYPES = {
   SOURCE_CHANGED: { label: '데이터 소스 변경', tone: 'sky' },
   CCTV_CONFIGURED: { label: 'CCTV 소스 변경', tone: 'sky' },
   PERSIST_CONFIGURED: { label: '서버 저장소', tone: 'sky' },
+  TARGET_CHANGED: { label: '일일 목표 변경', tone: 'sky' },
+  HANDOVER_ADDED: { label: '인수인계 노트', tone: 'slate' },
   /* 키오스크 모드는 제거됨(2026-08-27) — 과거 로그의 라벨 표시용으로만 남긴다 */
   KIOSK_STARTED: { label: '키오스크 모드', tone: 'slate' },
 };

@@ -57,6 +57,9 @@ import { useWallClock } from './hooks/useWallClock.js';
 import { useProductionEngine } from './hooks/useProductionEngine.js';
 import { useTelemetry } from './hooks/useTelemetry.js';
 import { useMaintenance } from './hooks/useMaintenance.js';
+import { useEnergy } from './hooks/useEnergy.js';
+import { linePowerKw } from './lib/energy.js';
+import { shiftOf } from './lib/shift.js';
 import {
   CONSUMABLE_WARN_PCT, consumableAlarmOf, withLiveConsumable, withMaintHistory,
 } from './lib/maintenance.js';
@@ -204,6 +207,14 @@ export default function DigitalTwinDashboard() {
   const [offsetsByLine, setOffsetsByLine] = usePersistentState('offsetsByLine', INITIAL_OFFSETS_BY_LINE);
   const [memos, setMemos] = usePersistentState('memos', {}, reviveMemos);
 
+  /* 일일 생산 목표(라인별) — 관제의 "오늘 얼마나 왔나"의 분모. 관리자가 수정 */
+  const [dailyTargetByLine, setDailyTargetByLine] = usePersistentState(
+    'dailyTargetByLine',
+    () => Object.fromEntries(PLANTS.map((l) => [l.id, 400]))
+  );
+  /* 교대 인수인계 노트 — 라인 단위 특이사항 보드 (설비 메모와 별개) */
+  const [handoverNotes, setHandoverNotes] = usePersistentState('handoverNotes', []);
+
   /* 생산 실적(완료된 작업)·운영 이벤트 로그 — 리포트 화면의 데이터 소스 */
   const [production, setProduction] = usePersistentState('production', []);
   const [events, setEvents] = usePersistentState('events', []);
@@ -253,6 +264,9 @@ export default function DigitalTwinDashboard() {
   const stoppedLines = PLANTS.filter((l) => eStopByLine[l.id]);
 
   const now = useWallClock();
+  /* '오늘'의 기준 문자열 — 1Hz 시계에서 유도해 자정에 정확히 바뀐다.
+     '금일' 지표들의 memo dep 으로 써서 날짜 경계에서 어제 값이 남지 않게 한다. */
+  const todayStr = fmtDate(now);
 
   /**
    * 작업 완료 — 엔진이 선두 작업의 표준시간을 다 채우면 호출한다.
@@ -386,13 +400,15 @@ export default function DigitalTwinDashboard() {
     return Object.fromEntries(PLANTS.map((l, i) => [l.id, Number(parts[i]) || 0]));
   }, [dischargedKey]);
 
-  /* 금일 누적 생산량(선택된 라인) — 완료될 때마다 점프해 배속 효과가 눈에 띈다 */
-  const todayQty = useMemo(() => {
-    const today = fmtDate(new Date());
-    return production
-      .filter((p) => p.lineId === plant && fmtDate(new Date(p.finishedAt)) === today)
-      .reduce((sum, p) => sum + p.qty, 0);
-  }, [production, plant]);
+  /* 금일 누적 생산량(선택된 라인) — 완료될 때마다 점프해 배속 효과가 눈에 띈다.
+     todayStr 을 dep 으로 둬 자정을 넘기면 (완료가 없어도) 0 으로 리셋된다 */
+  const todayQty = useMemo(
+    () =>
+      production
+        .filter((p) => p.lineId === plant && fmtDate(new Date(p.finishedAt)) === todayStr)
+        .reduce((sum, p) => sum + p.qty, 0),
+    [production, plant, todayStr]
+  );
 
   /* 텔레메트리 — 정지(E-STOP)·유휴(대기열 없음) 라인은 센서값이 식는다 */
   const telemetryStopped = useMemo(
@@ -499,6 +515,14 @@ export default function DigitalTwinDashboard() {
   /* 같은 설비에 여러 건이면 가장 최근 건을 상세 패널에 보여준다 */
   const selectedAssetFault =
     alarms.findLast((a) => a.lineId === plant && a.assetId === selectedId) ?? null;
+
+  /* 에너지(모의) — 순간 전력은 텔레메트리에서 즉시 유도, 금일 kWh 는 훅이 적산 */
+  const { kwhByLine } = useEnergy({ latest: telemetry.latest });
+  const kwByLine = useMemo(
+    () => Object.fromEntries(PLANTS.map((l) => [l.id, linePowerKw(telemetry.latest[l.id])])),
+    [telemetry.latest]
+  );
+  const factoryKw = PLANTS.reduce((s, l) => s + (kwByLine[l.id] ?? 0), 0);
 
   /**
    * 설비 보전 — 라인이 처리한 EA 만큼 소모품이 실제로 닳는다.
@@ -753,6 +777,40 @@ export default function DigitalTwinDashboard() {
     });
   };
 
+  /** 일일 목표 수량 변경 — 생산 계획 권한(jobs.manage) */
+  const handleSetDailyTarget = (qty) => {
+    if (!can('jobs.manage')) return;
+    const next = Math.max(0, Math.floor(qty) || 0);
+    if (next === (dailyTargetByLine[plant] ?? 0)) return;
+    setDailyTargetByLine((prev) => ({ ...prev, [plant]: next }));
+    logEvent('TARGET_CHANGED', `${plantName} 일일 목표 ${next} EA 로 변경`, { lineId: plant });
+  };
+
+  /** 교대 인수인계 노트 — 작성 시점의 교대(주간/야간)를 함께 박는다 */
+  const handleAddHandover = (text) => {
+    if (!can('memo.write')) return;
+    const s = shiftOf(now);
+    const note = {
+      id: `HO-${Date.now()}`,
+      at: new Date().toISOString(),
+      lineId: plant,
+      shiftLabel: s.label,
+      text,
+      user: session?.name ?? '-',
+    };
+    /* 상한은 라인별 100건 — 전역으로 자르면 한 라인의 활발한 기록이
+       다른 라인의 인수인계(기록성 데이터)를 소리 없이 밀어낸다 */
+    setHandoverNotes((prev) => {
+      const next = [note, ...prev];
+      const countByLine = {};
+      return next.filter((n) => {
+        countByLine[n.lineId] = (countByLine[n.lineId] ?? 0) + 1;
+        return countByLine[n.lineId] <= 100;
+      });
+    });
+    logEvent('HANDOVER_ADDED', `${plantName} 인수인계 노트 작성 (${s.label})`, { lineId: plant });
+  };
+
   /** 소모품 교체 — 잔량 100% 리셋 + 이력·감사 기록. 이 소모품의 알람(M-)도 함께 해제한다. */
   const handleReplaceConsumable = (assetId) => {
     const asset = findLineAsset(plant, assetId);
@@ -810,7 +868,6 @@ export default function DigitalTwinDashboard() {
    * 관제 뷰 데이터 — 라인별 요약 카드 한 장에 필요한 전부.
    *  관제 뷰가 열려 있을 때만 계산한다 (매초 리렌더에서 불필요한 집계 방지).
    */
-  const todayStr = fmtDate(new Date());
   const nowMs = now.getTime();
   const effSpeed = mode === 'simulation' ? speed : 1;
   const overviewData =
@@ -882,6 +939,9 @@ export default function DigitalTwinDashboard() {
             riskyCount: liveAssets.filter(
               (a) => a.consumable && a.consumable.percent <= CONSUMABLE_WARN_PCT
             ).length,
+            dailyTarget: dailyTargetByLine[l.id] ?? 0,
+            kw: kwByLine[l.id] ?? 0,
+            kwhToday: kwhByLine[l.id] ?? 0,
           };
         })
       : null;
@@ -969,6 +1029,13 @@ export default function DigitalTwinDashboard() {
           lineAssets={lineAssets}
           canManageJobs={can('jobs.manage')}
           manageHint={PERMISSION_HINTS['jobs.manage']}
+          lineId={plant}
+          dailyTarget={dailyTargetByLine[plant] ?? 0}
+          onSetDailyTarget={handleSetDailyTarget}
+          handoverNotes={handoverNotes.filter((n) => n.lineId === plant)}
+          onAddHandover={handleAddHandover}
+          canWriteHandover={can('memo.write')}
+          handoverHint={PERMISSION_HINTS['memo.write']}
         />
 
         <TwinViewport
@@ -1055,6 +1122,10 @@ export default function DigitalTwinDashboard() {
                   : '연결됨'}
           </button>
           <span>Latency {telemetry.latencyMs ?? '--'}ms</span>
+          {/* 공장 소비 전력(모의) — 텔레메트리 전류에서 유도 */}
+          <span title="설비 전류에서 유도한 모의 소비 전력 (3상 380V · 역률 0.85 가정)">
+            ⚡ {factoryKw.toFixed(1)} kW
+          </span>
           <span>Sync {fmtDate(now)} {fmtClock(now)}</span>
           {/* 비상 정지가 라인 단위라, 보고 있지 않은 라인이 멈춰 있어도 알 수 있어야 한다 */}
           {stoppedLines.length > 0 && (
