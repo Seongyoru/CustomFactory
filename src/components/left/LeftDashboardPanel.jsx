@@ -43,6 +43,75 @@ const CylinderGauge = ({ theme, cylinder }) => (
   </div>
 );
 
+/**
+ * 생산 진행 곡선(S-커브) — "그 시각에 몇 개까지 나와 있을까".
+ *  로트 경계의 P50 완료 시각으로 누적 수량 곡선을 그리고, P90 을 점선 밴드로 겹친다.
+ *  두 선의 벌어짐이 곧 계획의 불확실성이다.
+ */
+const ProgressCurve = ({ theme, timeline, anchorMs }) => {
+  const W = 264;
+  const H = 96;
+  const plotH = 78;
+  const totalQty = timeline.reduce((s, r) => s + r.qty, 0);
+  const xMax = Math.max(1e-9, timeline[timeline.length - 1].endP90WallSec);
+  const xOf = (sec) => (sec / xMax) * (W - 8) + 4;
+  const yOf = (qty) => plotH - (qty / Math.max(1, totalQty)) * (plotH - 8);
+  let cum = 0;
+  const p50Pts = [[xOf(0), yOf(0)]];
+  const p90Pts = [[xOf(0), yOf(0)]];
+  timeline.forEach((r) => {
+    cum += r.qty;
+    p50Pts.push([xOf(r.endWallSec), yOf(cum)]);
+    p90Pts.push([xOf(r.endP90WallSec), yOf(cum)]);
+  });
+  const toStr = (pts) => pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="생산 진행 곡선">
+      <line x1="4" x2={W - 4} y1={plotH} y2={plotH} stroke="currentColor" strokeWidth="0.6" opacity="0.25" />
+      {/* P90 — 늦어질 수 있는 경로 */}
+      <polyline points={toStr(p90Pts)} fill="none" stroke={theme.accentHex} strokeWidth="1.1" strokeDasharray="3 3" opacity="0.45" />
+      {/* P50 — 기대 경로 */}
+      <polyline points={toStr(p50Pts)} fill="none" stroke={theme.accentHex} strokeWidth="1.6" />
+      {p50Pts.slice(1).map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="2" fill={theme.accentHex} />
+      ))}
+      <text x="4" y={H - 2} fontSize="8" fill="currentColor" opacity="0.45">지금</text>
+      <text x={W - 4} y={H - 2} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.45">
+        ~{fmtClock(new Date(anchorMs + xMax * 1000), false)}
+      </text>
+      <text x={W - 4} y="10" textAnchor="end" fontSize="8" fill="currentColor" opacity="0.55">
+        {totalQty} EA
+      </text>
+    </svg>
+  );
+};
+
+/** 시간 구성 스택바 — 남은 계획의 시간이 어디로 가는가 (표준시간 기준) */
+const TimeBreakdownBar = ({ theme, breakdown }) => {
+  const stop = Math.max(0, breakdown.stopMeanSec);
+  const total = Math.max(1e-9, breakdown.netSec + breakdown.overheadSec + stop);
+  const seg = (v) => `${(v / total) * 100}%`;
+  const rows = [
+    ['정미 생산', breakdown.netSec, theme.accentHex, 1],
+    ['도입·마무리', breakdown.overheadSec, theme.accentHex, 0.35],
+    ['돌발 정지(평균)', stop, '#ef4444', 0.85],
+  ];
+  return (
+    <div>
+      <div className={`flex h-2 rounded-full overflow-hidden ${theme.trackBg}`}>
+        {rows.map(([k, v, color, op]) => (
+          <span key={k} style={{ width: seg(v), backgroundColor: color, opacity: op }} title={`${k} ${fmtKoDuration(Math.round(v))}`} />
+        ))}
+      </div>
+      <div className={`mt-1 grid grid-cols-3 gap-1 text-[9px] tabular-nums ${theme.textFaint}`}>
+        {rows.map(([k, v]) => (
+          <span key={k} className="truncate">{k} {Math.round((v / total) * 100)}%</span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
   selectedJobId, onSelectJob, onReorderJobs, onApplyOrder, onSaveSnapshot,
@@ -51,6 +120,7 @@ const LeftDashboardPanel = ({
   canManageJobs = true, manageHint,
   dailyTarget = 0, onSetDailyTarget,
   handoverNotes = [], onAddHandover, canWriteHandover = true, handoverHint,
+  demoAutofill = true, onToggleAutofill,
 }) => {
   /* 일일 목표 인라인 편집 (생산 계획 권한) */
   const [targetEdit, setTargetEdit] = useState(null); // null=보기, 문자열=편집 중
@@ -320,8 +390,29 @@ const LeftDashboardPanel = ({
           icon={Layers}
           title="생산 오더 대기열"
           theme={theme}
-          hint="작업지시는 로트(품목+수량) 단위입니다. 맨 위 로트가 지금 라인을 흐르고 있고, 행을 드래그해 생산 순서를 바꿀 수 있습니다."
-          right={<span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{jobs.length} LOTS</span>}
+          hint="작업지시는 로트(품목+수량) 단위입니다. 맨 위 로트가 지금 라인을 흐르고 있고, 행을 드래그해 생산 순서를 바꿀 수 있습니다. '자동' 이 켜져 있으면 대기열이 비는 순간 카탈로그에서 데모 로트가 보충됩니다."
+          right={
+            <span className="flex items-center gap-1.5">
+              {/* 데모 오토필 — 방치해도 공장이 계속 돌게 */}
+              <button
+                type="button"
+                disabled={!canManageJobs}
+                onClick={onToggleAutofill}
+                title={canManageJobs
+                  ? (demoAutofill ? '대기열 자동 보충 켜짐 — 클릭해서 끄기' : '대기열 자동 보충 꺼짐 — 클릭해서 켜기')
+                  : manageHint}
+                className={`px-1.5 py-0.5 rounded border text-[9px] font-bold transition-colors
+                  disabled:cursor-not-allowed
+                  ${demoAutofill
+                    ? `${theme.accentBgSoft} ${theme.accentText}`
+                    : `${theme.chip} opacity-60`}`}
+                style={demoAutofill ? { borderColor: theme.accentHex } : undefined}
+              >
+                자동 {demoAutofill ? 'ON' : 'OFF'}
+              </button>
+              <span className={`text-[10px] tabular-nums ${theme.textFaint}`}>{jobs.length} LOTS</span>
+            </span>
+          }
         />
 
         <ul className="flex-1 overflow-y-auto p-2 space-y-1.5">
@@ -565,7 +656,61 @@ const LeftDashboardPanel = ({
                     <span>소요 분포</span>
                     <span>{fmtKoDuration(r.histogram.maxSec)}</span>
                   </div>
+
+                  {/* 교대·금일 연계 확률 — "이 계획, 우리 조에서 끝나나?" */}
+                  {(() => {
+                    const anchor = new Date(r.anchorMs);
+                    const shiftEndSec = (shiftOf(anchor).endAt.getTime() - r.anchorMs) / 1000;
+                    const midnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 1);
+                    const midnightSec = (midnight.getTime() - r.anchorMs) / 1000;
+                    const pShift = probabilityBefore(r.totalsWallSorted, shiftEndSec);
+                    const pToday = probabilityBefore(r.totalsWallSorted, midnightSec);
+                    const chip = (label, p) => (
+                      <span
+                        className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold tabular-nums
+                          ${p >= 0.9 ? 'text-emerald-500 border-emerald-500/40 bg-emerald-500/10'
+                            : p >= 0.5 ? `${theme.chip}`
+                            : 'text-amber-500 border-amber-500/40 bg-amber-500/10'}`}
+                      >
+                        {label} {Math.round(p * 100)}%
+                      </span>
+                    );
+                    return (
+                      <div className="mt-2 flex items-center gap-1.5">
+                        {chip(`${shiftOf(anchor).label} 내 완료`, pShift)}
+                        {chip('금일 내 완료', pToday)}
+                      </div>
+                    );
+                  })()}
                 </div>
+
+                {/* 생산 진행 곡선 — 시각별 누적 완성 수량 (P50 실선 · P90 점선) */}
+                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 ${theme.textSecondary}`}>
+                  <div className="flex items-baseline justify-between mb-1">
+                    <p className={`text-[10px] font-bold ${theme.textMuted}`}>생산 진행 곡선</p>
+                    <p className={`text-[9px] ${theme.textGhost}`}>실선 P50 · 점선 P90 — 벌어질수록 불확실</p>
+                  </div>
+                  <ProgressCurve theme={theme} timeline={r.timeline} anchorMs={r.anchorMs} />
+                </div>
+
+                {/* 시간 구성 — 남은 계획의 시간이 어디로 가는가 */}
+                {r.breakdown && (
+                  <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+                    <div className="flex items-baseline justify-between mb-1.5">
+                      <p className={`text-[10px] font-bold ${theme.textMuted}`}>시간 구성 (표준시간 기준)</p>
+                      <p className={`text-[9px] tabular-nums ${theme.textGhost}`}>
+                        사이클 편차 평균 {r.breakdown.jitterMeanSec >= 0 ? '+' : '−'}{fmtKoDuration(Math.round(Math.abs(r.breakdown.jitterMeanSec)))}
+                      </p>
+                    </div>
+                    <TimeBreakdownBar theme={theme} breakdown={r.breakdown} />
+                    <p className={`mt-1.5 text-[10px] leading-relaxed tabular-nums ${theme.textFaint}`}>
+                      돌발 정지 평균 <b>{r.breakdown.stopMeanCount.toFixed(1)}회 · {fmtKoDuration(Math.round(r.breakdown.stopMeanSec))}</b> 손실
+                      {r.breakdown.stopP90Sec > r.breakdown.stopMeanSec
+                        ? <> — 운 나쁜 날(상위 10%)은 {fmtKoDuration(Math.round(r.breakdown.stopP90Sec))} 이상, 최악 {r.breakdown.stopMaxCount}회까지.</>
+                        : <> — 10회 중 9회는 정지 없이 통과하지만, 최악 {r.breakdown.stopMaxCount}회까지 발생했습니다.</>}
+                    </p>
+                  </div>
+                )}
 
                 {/* ① 로트별 간트 타임라인 — P50 시작~종료 띠 + P90 리스크 수염 */}
                 <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>

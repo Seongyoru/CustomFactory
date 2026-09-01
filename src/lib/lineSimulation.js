@@ -174,21 +174,37 @@ export const consumableOutlook = (lots, headElapsedSec = 0, assets = SELECTABLE_
  * 몬테카를로
  * ------------------------------------------------------------------------- */
 
-/** 로트 1개의 소요(실초)를 확률적으로 1회 샘플링 */
-export const sampleLotSec = (lot, rng) => {
+/**
+ * 로트 1개의 소요(실초)를 확률적으로 1회 샘플링 — 시간 구성까지 분해해 돌려준다.
+ *  netSec      정미 생산 (수량 × 택트, 결정적)
+ *  overheadSec 로드 도입·마무리 (결정적)
+ *  jitterSec   사이클 편차의 순기여 (평균 약 −1% — 음수일 수 있다)
+ *  stopSec/stopCount  돌발 정지 손실
+ *  "시간이 어디로 새는가"의 근거가 된다 — sec = net + overhead + jitter + stop.
+ */
+export const sampleLotBreakdown = (lot, rng) => {
   const A = SIM_ASSUMPTIONS;
-  let sec = 0;
+  let netSec = 0;
+  let overheadSec = 0;
+  let jitterSec = 0;
+  let stopSec = 0;
+  let stopCount = 0;
   for (const n of loadPlanFor(lot.qty)) {
-    sec += (lot.taktSec * LOAD_OVERHEAD_F) / REPEAT_PERIOD_F; // 도입+마무리
+    overheadSec += (lot.taktSec * LOAD_OVERHEAD_F) / REPEAT_PERIOD_F; // 도입+마무리
     for (let i = 0; i < n; i++) {
-      sec += lot.taktSec * (A.cycleJitterMin + rng() * A.cycleJitterSpan);
+      netSec += lot.taktSec;
+      jitterSec += lot.taktSec * (A.cycleJitterMin - 1 + rng() * A.cycleJitterSpan);
       if (rng() < A.microStopProbPerEa) {
-        sec += A.microStopMinSec + rng() * A.microStopSpanSec;
+        stopCount += 1;
+        stopSec += A.microStopMinSec + rng() * A.microStopSpanSec;
       }
     }
   }
-  return sec;
+  return { sec: netSec + overheadSec + jitterSec + stopSec, netSec, overheadSec, jitterSec, stopSec, stopCount };
 };
+
+/** 로트 1개의 소요(실초)만 필요할 때 — 분해판의 합계 (기존 계약 유지) */
+export const sampleLotSec = (lot, rng) => sampleLotBreakdown(lot, rng).sec;
 
 const quantile = (sorted, q) => {
   if (sorted.length === 0) return 0;
@@ -266,11 +282,31 @@ export function simulateLine({
   const A = SIM_ASSUMPTIONS;
   const totals = [];
   const defectsPerRun = [];
+  const stopSecPerRun = [];
+  const stopCountPerRun = [];
+  const jitterSecPerRun = [];
   const perLotFinishes = lots.map(() => []); // 간트용 — 로트별 누적 완료 시각 분포
   const head = lots[0] ?? null;
   const headDoneEa = head ? completedEaAt(headElapsedSec, head.qty, head.taktSec) : 0;
   const headRemainEa = head ? Math.max(0, head.qty - headDoneEa) : 0;
   const headDetRemainSec = head ? Math.max(0, head.totalSec - headElapsedSec) : 0;
+
+  /* 시간 구성의 결정적 부분 — 매 회 동일하므로 한 번만 계산한다.
+     선두 진행 중 로트의 잔여는 정미(잔여 EA×택트)와 그 밖(도입·마무리 잔여)으로 나눈다. */
+  let detNetSec = 0;
+  let detOverheadSec = 0;
+  lots.forEach((lot, i) => {
+    if (i === 0 && headElapsedSec > 0) {
+      const net = headRemainEa * lot.taktSec;
+      detNetSec += Math.min(net, headDetRemainSec);
+      detOverheadSec += Math.max(0, headDetRemainSec - net);
+    } else {
+      const net = lot.qty * lot.taktSec;
+      const overhead = loadPlanFor(lot.qty).length * ((lot.taktSec * LOAD_OVERHEAD_F) / REPEAT_PERIOD_F);
+      detNetSec += net;
+      detOverheadSec += overhead;
+    }
+  });
 
   return new Promise((resolve) => {
     let done = 0;
@@ -280,6 +316,9 @@ export function simulateLine({
       for (; done < end; done++) {
         let sec = 0;
         let defects = 0;
+        let runStopSec = 0;
+        let runStopCount = 0;
+        let runJitterSec = 0;
         lots.forEach((lot, i) => {
           let lotSec;
           if (i === 0 && headElapsedSec > 0) {
@@ -289,14 +328,23 @@ export function simulateLine({
             lotSec = headDetRemainSec;
             for (let j = 0; j < headRemainEa; j++) {
               /* 지터는 결정적 기준선 위에 (배율−1) 편차로 얹는다 (평균 −0.01) */
-              lotSec += lot.taktSec * (A.cycleJitterMin - 1 + rng() * A.cycleJitterSpan);
+              const jit = lot.taktSec * (A.cycleJitterMin - 1 + rng() * A.cycleJitterSpan);
+              lotSec += jit;
+              runJitterSec += jit;
               if (rng() < A.microStopProbPerEa) {
-                lotSec += A.microStopMinSec + rng() * A.microStopSpanSec;
+                const stop = A.microStopMinSec + rng() * A.microStopSpanSec;
+                lotSec += stop;
+                runStopSec += stop;
+                runStopCount += 1;
               }
             }
             lotSec = Math.max(0, lotSec);
           } else {
-            lotSec = sampleLotSec(lot, rng);
+            const b = sampleLotBreakdown(lot, rng);
+            lotSec = b.sec;
+            runJitterSec += b.jitterSec;
+            runStopSec += b.stopSec;
+            runStopCount += b.stopCount;
           }
           sec += lotSec;
           perLotFinishes[i].push(sec); // 이 로트가 끝나는 누적 시각
@@ -304,6 +352,9 @@ export function simulateLine({
         });
         totals.push(sec);
         defectsPerRun.push(defects);
+        stopSecPerRun.push(runStopSec);
+        stopCountPerRun.push(runStopCount);
+        jitterSecPerRun.push(runJitterSec);
       }
       onProgress?.(done, runs);
       if (done < runs) {
@@ -355,6 +406,20 @@ export function simulateLine({
         defects: {
           mean: Math.round(defectsPerRun.reduce((s, d) => s + d, 0) / runs),
           max: Math.max(...defectsPerRun),
+        },
+        /**
+         * 시간 구성 — "남은 계획의 시간이 어디로 가는가" (표준시간 초 기준).
+         *  net/overhead 는 결정적, jitter 평균은 살짝 음수(공칭 −1%)일 수 있다.
+         *  stop 은 평균과 90% 상한을 함께 준다 — 손실의 꼬리가 계획을 흔드는 주범이다.
+         */
+        breakdown: {
+          netSec: detNetSec,
+          overheadSec: detOverheadSec,
+          jitterMeanSec: jitterSecPerRun.reduce((s, v) => s + v, 0) / runs,
+          stopMeanSec: stopSecPerRun.reduce((s, v) => s + v, 0) / runs,
+          stopP90Sec: quantile([...stopSecPerRun].sort((a, b) => a - b), 0.9),
+          stopMeanCount: stopCountPerRun.reduce((s, v) => s + v, 0) / runs,
+          stopMaxCount: Math.max(...stopCountPerRun),
         },
         sensitivity: bottleneckSensitivity(lots, 0.1, headElapsedSec),
         consumables: consumableOutlook(lots, headElapsedSec, assets),

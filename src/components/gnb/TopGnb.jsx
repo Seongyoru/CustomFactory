@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, GraduationCap, LayoutGrid, LogOut, Moon, Siren, Sun, User,
+  Activity, AlertOctagon, BarChart3, ChevronDown, Cpu, Factory, GraduationCap, LayoutGrid, LogOut, Moon, Siren, Sun, User, Volume2, VolumeX,
 } from 'lucide-react';
 import { PRODUCTION_LINES } from '../../data/factoryAssets.js';
 import { ROLES } from '../../auth/auth.js';
@@ -23,6 +23,7 @@ const TopGnb = ({
   onOpenReport, user, onLogout, onStartTutorial,
   view = 'line', onViewChange,
   alarms = [], onAlarmGoTo, onAlarmClear, canClearAlarm = true, clearAlarmHint,
+  soundOn = true, onToggleSound,
 }) => {
   /* 프로필 드롭다운 — 바깥 클릭으로 닫힌다 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -161,6 +162,18 @@ const TopGnb = ({
         canClear={canClearAlarm}
         clearHint={clearAlarmHint}
       />
+
+      {/* 사운드 — 알람·완료·E-STOP 청각 피드백 */}
+      <button
+        type="button"
+        onClick={onToggleSound}
+        title={soundOn ? '알림음 끄기' : '알림음 켜기 (알람·로트 완료·비상 정지)'}
+        aria-label="알림음"
+        className={`grid place-items-center w-9 h-9 rounded-lg border ${theme.panelBorder} ${theme.subtleBg}
+          ${soundOn ? theme.textSecondary : theme.textGhost} ${theme.hoverBg} transition-colors`}
+      >
+        {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+      </button>
 
       {/* 다크 / 라이트 전환 */}
       <button

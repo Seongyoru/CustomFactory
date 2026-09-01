@@ -64,6 +64,7 @@ import {
   CONSUMABLE_WARN_PCT, consumableAlarmOf, withLiveConsumable, withMaintHistory,
 } from './lib/maintenance.js';
 import { splitDefects } from './lib/quality.js';
+import { playAlarm, playComplete, playEstop, unlockAudio } from './lib/sound.js';
 
 import TopGnb from './components/gnb/TopGnb.jsx';
 import LeftDashboardPanel from './components/left/LeftDashboardPanel.jsx';
@@ -207,6 +208,20 @@ export default function DigitalTwinDashboard() {
   const [offsetsByLine, setOffsetsByLine] = usePersistentState('offsetsByLine', INITIAL_OFFSETS_BY_LINE);
   const [memos, setMemos] = usePersistentState('memos', {}, reviveMemos);
 
+  /* 데모 오토필 — 대기열이 소진되면 카탈로그에서 로트를 자동 보충한다.
+     방치해도 공장이 계속 돌아야 데모가 산다. 끌 수 있다(대기열 패널 토글). */
+  const [demoAutofill, setDemoAutofill] = usePersistentState('demoAutofill', true);
+  /* 사운드 — 알람·완료·E-STOP 청각 피드백 (Web Audio 합성, GNB 스피커 토글) */
+  const [soundOn, setSoundOn] = usePersistentState('ui.sound', true);
+  const soundOnRef = useRef(soundOn);
+  soundOnRef.current = soundOn;
+  useEffect(() => {
+    /* 브라우저 자동재생 정책 — 첫 사용자 제스처에서 오디오 잠금을 푼다 */
+    const unlock = () => unlockAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    return () => window.removeEventListener('pointerdown', unlock);
+  }, []);
+
   /* 일일 생산 목표(라인별) — 관제의 "오늘 얼마나 왔나"의 분모. 관리자가 수정 */
   const [dailyTargetByLine, setDailyTargetByLine] = usePersistentState(
     'dailyTargetByLine',
@@ -295,9 +310,40 @@ export default function DigitalTwinDashboard() {
         lineId,
         jobId: job.id,
       });
+      if (soundOnRef.current) playComplete();
     },
     [setJobsByLine, setProduction, logEvent]
   );
+
+  /**
+   * 데모 오토필 — 어떤 라인이든 대기열이 소진되면 카탈로그에서 무작위 로트를
+   * 1건 보충한다. 완료될 때마다 자연스럽게 이어져 "언제 들어와도 돌아가는 공장"이 된다.
+   *  ref 가드: StrictMode 이중 실행·연속 렌더에서 같은 라인에 두 번 넣지 않게.
+   */
+  const refillingRef = useRef({});
+  useEffect(() => {
+    if (!demoAutofill || products.length === 0) return;
+    PLANTS.forEach((line) => {
+      const empty = (jobsByLine[line.id] ?? []).length === 0;
+      if (!empty) {
+        refillingRef.current[line.id] = false;
+        return;
+      }
+      if (refillingRef.current[line.id]) return;
+      refillingRef.current[line.id] = true;
+      const product = products[Math.floor(Math.random() * products.length)];
+      setJobsByLine((prev) => {
+        const queue = prev[line.id] ?? [];
+        if (queue.length > 0) return prev; // 경합 방지 — 그 사이 수동 추가됐으면 양보
+        const lot = makeLot(makeLotId(nextLotSeq(queue)), product, product.defaultQty);
+        return { ...prev, [line.id]: normalizeQueue([lot]) };
+      });
+      logEvent('JOB_ADDED', `${line.name} 데모 자동 보충 — ${product.name} · ${product.defaultQty} EA`, {
+        lineId: line.id,
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobsByLine, demoAutofill, products]);
 
   const { elapsedByLine, lineStats, resetElapsed, resetStats } = useProductionEngine({
     jobsByLine,
@@ -484,6 +530,7 @@ export default function DigitalTwinDashboard() {
       alarmsRef.current = queue;
       setAlarms(queue);
       logEvent('ALARM_RAISED', `[${a.code}] ${a.title}`, { lineId: a.lineId, assetId: a.assetId });
+      if (soundOnRef.current) playAlarm(); // 신규 발생만 — 코얼레싱 갱신은 위에서 return
       return true;
     },
     [logEvent, setAlarms]
@@ -626,6 +673,7 @@ export default function DigitalTwinDashboard() {
   const handleEStopToggle = () => {
     const engaging = !eStopByLine[plant];
     if (!can(engaging ? 'estop.engage' : 'estop.release')) return;
+    if (engaging && soundOnRef.current) playEstop();
     setEStopByLine((prev) => ({ ...prev, [plant]: engaging }));
     logEvent(engaging ? 'ESTOP_ON' : 'ESTOP_OFF', `${lineNameOf(plant)} ${engaging ? '비상 정지' : '비상 정지 해제'}`, {
       lineId: plant,
@@ -989,6 +1037,8 @@ export default function DigitalTwinDashboard() {
         onStartTutorial={() => setTutorialOpen(true)}
         view={view}
         onViewChange={setView}
+        soundOn={soundOn}
+        onToggleSound={() => setSoundOn((v) => !v)}
         alarms={alarms}
         onAlarmGoTo={handleGoToFault}
         onAlarmClear={(id) => clearAlarm(id, '수동 해제')}
@@ -1040,6 +1090,12 @@ export default function DigitalTwinDashboard() {
           onSetDailyTarget={handleSetDailyTarget}
           handoverNotes={handoverNotes.filter((n) => n.lineId === plant)}
           onAddHandover={handleAddHandover}
+          demoAutofill={demoAutofill}
+          onToggleAutofill={() => {
+            if (!can('jobs.manage')) return;
+            setDemoAutofill((v) => !v);
+            logEvent('JOB_ADDED', `데모 자동 보충 ${demoAutofill ? '끔' : '켬'}`);
+          }}
           canWriteHandover={can('memo.write')}
           handoverHint={PERMISSION_HINTS['memo.write']}
         />

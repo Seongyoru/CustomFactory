@@ -12,6 +12,7 @@ import {
   orderSuggestion,
   planSummary,
   probabilityBefore,
+  sampleLotBreakdown,
   sampleLotSec,
   simulateLine,
   timeOfEa,
@@ -29,6 +30,45 @@ const seeded = (seed) => {
 };
 
 const LOT = (qty, takt = 7.6) => ({ qty, taktSec: takt, totalSec: lotTotalSec(qty, takt) });
+
+describe('시간 구성 분해', () => {
+  it('sampleLotBreakdown — 구성 요소의 합이 곧 소요이고, sampleLotSec 와 같은 rng 소비를 한다', () => {
+    const b = sampleLotBreakdown(LOT(50), seeded(5));
+    expect(b.netSec).toBeCloseTo(50 * 7.6, 10); // 정미 = 수량 × 택트 (결정적)
+    expect(b.overheadSec).toBeGreaterThan(0);
+    expect(b.netSec + b.overheadSec + b.jitterSec + b.stopSec).toBeCloseTo(b.sec, 10);
+    /* 같은 시드면 합계 함수와 완전히 동일해야 한다 — rng 호출 순서 보존의 증거 */
+    expect(sampleLotSec(LOT(50), seeded(5))).toBeCloseTo(b.sec, 10);
+  });
+
+  it('simulateLine — breakdown 이 정합한다 (결정적 정미·오버헤드, 그럴듯한 돌발 통계)', async () => {
+    const lots = [LOT(100), LOT(60)];
+    const r = await simulateLine({ lots, runs: 400, rng: seeded(21) });
+    const bd = r.breakdown;
+    expect(bd.netSec).toBeCloseTo(160 * 7.6, 6);
+    expect(bd.overheadSec).toBeGreaterThan(0);
+    /* 평균 총소요(표준초) ≈ 정미 + 오버헤드 + 편차 평균 + 정지 평균 */
+    const meanTotal = r.totalsWallSorted.reduce((s, v) => s + v, 0) / r.totalsWallSorted.length;
+    expect(bd.netSec + bd.overheadSec + bd.jitterMeanSec + bd.stopMeanSec).toBeCloseTo(meanTotal, 4);
+    /* 돌발 정지 기대 횟수 ≈ 160 × 0.5% = 0.8회 부근 */
+    expect(bd.stopMeanCount).toBeGreaterThan(0.3);
+    expect(bd.stopMeanCount).toBeLessThan(1.6);
+    expect(bd.stopP90Sec).toBeGreaterThanOrEqual(0);
+    expect(bd.stopMaxCount).toBeGreaterThanOrEqual(Math.round(bd.stopMeanCount));
+    /* 편차 평균은 공칭 −1% 부근의 작은 음수 */
+    expect(bd.jitterMeanSec).toBeLessThan(0);
+    expect(Math.abs(bd.jitterMeanSec)).toBeLessThan(bd.netSec * 0.05);
+  });
+
+  it('선두 진행 중에도 정미/오버헤드 분해가 잔여 기준으로 줄어든다', async () => {
+    const lots = [LOT(100)];
+    const half = timeOfEa(lots, 50);
+    const r = await simulateLine({ lots, headElapsedSec: half, runs: 100, rng: seeded(3) });
+    expect(r.breakdown.netSec).toBeLessThan(100 * 7.6);
+    expect(r.breakdown.netSec).toBeGreaterThan(40 * 7.6);
+    expect(r.breakdown.overheadSec).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe('결정식 유틸', () => {
   it('planSummary — 수량·로드·실린더 집계', () => {
