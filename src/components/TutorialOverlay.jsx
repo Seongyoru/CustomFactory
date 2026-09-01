@@ -111,6 +111,10 @@ const TutorialOverlay = ({ theme, onClose }) => {
       else onClose();
       return undefined;
     }
+    /* 스크롤 영역(좌패널 등) 밖의 대상은 먼저 화면 안으로 데려온다 —
+       오버레이가 포인터를 막고 있어 사용자가 직접 스크롤할 수 없고,
+       화면 밖 좌표로는 스포트라이트·카드가 전부 어긋난다 */
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const update = () => setRect(el.getBoundingClientRect());
     update();
     window.addEventListener('resize', update);
@@ -129,10 +133,14 @@ const TutorialOverlay = ({ theme, onClose }) => {
 
   if (!rect) return null;
 
-  /* 카드 배치 — 대상 아래 공간이 부족하면 위로, 좌우는 화면 안으로 클램프 */
+  /* 카드 배치 — 대상 아래 공간이 부족하면 위로, 상하좌우 모두 화면 안으로 클램프.
+     (대상이 커서 화면을 넘치는 경우에도 카드와 버튼은 반드시 보여야 한다) */
   const CARD_H_GUESS = 190;
   const below = rect.bottom + PAD + CARD_H_GUESS < window.innerHeight;
-  const cardTop = below ? rect.bottom + PAD + 10 : Math.max(12, rect.top - PAD - CARD_H_GUESS - 10);
+  const cardTop = Math.min(
+    Math.max(12, below ? rect.bottom + PAD + 10 : rect.top - PAD - CARD_H_GUESS - 10),
+    Math.max(12, window.innerHeight - CARD_H_GUESS - 12)
+  );
   const cardLeft = Math.min(
     Math.max(12, rect.left + rect.width / 2 - CARD_W / 2),
     window.innerWidth - CARD_W - 12
