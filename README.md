@@ -84,6 +84,7 @@ node-opcua · vitest — 차트·게이지는 전부 수제 SVG(외부 차트 �
 
 ## 문서
 
+- [docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) — 5분 시연 스크립트 (타임라인·클릭 경로·멘트)
 - [docs/WORKLOG.md](docs/WORKLOG.md) — 요청 → 대응 → 검증 순의 전체 작업 이력
 - [docs/UPGRADE-2026-08-21.md](docs/UPGRADE-2026-08-21.md) — 상용화 1차 업그레이드 설계 노트
 
