@@ -267,7 +267,9 @@ const ReportModal = ({
   simSnapshots = [], onDeleteSnapshot, canManageSnapshots = true,
   consumablePercents = {}, maintLog = [],
   dailyTargetByLine = {}, kwhByLine = {}, handoverNotes = [],
-  canExport = true, exportHint, canReset = true, resetHint,
+  /* canReset 은 닫힌 기본값 — 초기화는 원격 저장소까지 지우는 파괴적 동작이라
+     prop 오배선 시 열리는 쪽(fail-open)이어서는 안 된다 */
+  canExport = true, exportHint, canReset = false, resetHint,
 }) => {
   const [tab, setTab] = useState('production');
   const [confirmReset, setConfirmReset] = useState(false);

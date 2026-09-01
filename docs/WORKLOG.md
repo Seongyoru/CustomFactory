@@ -595,3 +595,21 @@ KIOSK_STARTED 이벤트 타입은 과거 로그 라벨용으로만 잔존.
 - **OG/파비콘**: og:image 를 배포 절대 URL 로(스크레이퍼 대응), og:url·twitter:card·description 추가, favicon.png 생성(로고 실루엣+포인트 블루, sharp 합성)
 - **인쇄 보고서 확장**: 헤더에 현재 교대, 금일 요약에 목표 달성·금일 전력(kWh·CO₂), SPC 요약(평균/UCL/초과 로트), 교대 인수인계 최근 5건
 - **엑셀 확장**: '운영 요약'(라인별 일일 목표·kWh·CO₂)·'인수인계' 시트 추가
+
+---
+
+## 최종 통합 QA 스윕 (2026-09-01) — 확정 7건 수정 후 v1.0.0
+
+전체 앱을 4개 통합 관점(교차 기능·영속/리셋·권한·UI 엣지)으로 적대적 리뷰:
+
+**서버 저장소 왕복 무결성**
+- 디바운스 미발사분이 새로고침에 유실 → 부팅 선주입이 롤백하던 구멍: pagehide/visibilitychange 에서 미발사 PUT 강제 플러시(keepalive, 소형 본문만) — pendingPush 가 값을 함께 보관
+- persist-server 가 청크별 toString 으로 한글을 U+FFFD 로 깨뜨려 저장하던 결함: Buffer 누적 후 1회 디코드 + 상한을 실제 바이트 기준으로 (1바이트 어긋난 청크 스트리밍 왕복 테스트 PASS)
+- 데모 초기화의 원격 DELETE 가 reload 언로드에 잘려 데이터가 부활 → keepalive
+- 연결 시 일괄 업로드가 서버 고아 키를 안 지워 유령 상태 재주입 → 서버 비운 뒤 업로드
+
+**권한 방어선 (UI 게이트와 이중화)**
+- onResetData 에 can(data.reset), handleEStopToggle 에 실행 시점 engage/release 재검사(TOCTOU), handleAddMemo 에 can(memo.write), ReportModal canReset 기본값 fail-closed
+- 라인 전환 시 열린 E-STOP 확인 모달 무효화
+
+테스트 98건·빌드 통과.

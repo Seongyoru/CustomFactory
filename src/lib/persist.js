@@ -50,29 +50,58 @@ export const setRemoteStoreUrl = (url) => {
 const remoteBase = () => getRemoteStoreUrl().replace(/\/+$/, '');
 const remoteKeyUrl = (fullKey) => `${remoteBase()}/store/${encodeURIComponent(fullKey)}`;
 
-/* 키별 디바운스 큐 — 매초 갱신되는 키(경과시간 등)가 서버를 두들기지 않게 */
-const pendingPush = new Map();
+/* 키별 디바운스 큐 — 매초 갱신되는 키(경과시간 등)가 서버를 두들기지 않게.
+   값을 함께 보관한다: 언로드 순간 미발사분을 그대로 밀어낼 수 있어야 한다. */
+const pendingPush = new Map(); // fullKey → { timer, serialized }
+
+const sendPut = (fullKey, serialized) =>
+  fetch(remoteKeyUrl(fullKey), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: serialized,
+    /* 언로드 중에도 전송이 이어지게. 단 keepalive 는 본문 상한(~64KB)이 있어
+       큰 값(이벤트 로그 등)에서 거부될 수 있다 — 작은 값만 걸고 큰 값은 일반 전송 */
+    keepalive: serialized.length < 60_000,
+  }).catch(() => { /* 오프라인 — 로컬로 계속 */ });
+
 const schedulePush = (fullKey, serialized) => {
   if (!getRemoteStoreUrl()) return;
-  clearTimeout(pendingPush.get(fullKey));
-  pendingPush.set(
-    fullKey,
-    setTimeout(() => {
+  const prev = pendingPush.get(fullKey);
+  if (prev) clearTimeout(prev.timer);
+  pendingPush.set(fullKey, {
+    serialized,
+    timer: setTimeout(() => {
       pendingPush.delete(fullKey);
-      fetch(remoteKeyUrl(fullKey), {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: serialized,
-      }).catch(() => { /* 오프라인 — 로컬로 계속 */ });
-    }, 500)
-  );
+      sendPut(fullKey, serialized);
+    }, 500),
+  });
 };
+
+/**
+ * 언로드 직전 미발사분 강제 플러시 — 디바운스 창(500ms) 안에서 새로고침하면
+ * 마지막 변경이 서버에 못 올라가고, 다음 부팅 선주입이 그 변경을 롤백한다.
+ *  (부팅 선주입은 서버 사본을 신뢰하는 단순 참조 구현 — 이 플러시가 그 전제다)
+ */
+const flushPendingPush = () => {
+  for (const [fullKey, { timer, serialized }] of pendingPush) {
+    clearTimeout(timer);
+    sendPut(fullKey, serialized);
+  }
+  pendingPush.clear();
+};
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushPendingPush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flushPendingPush();
+  });
+}
 
 const remoteDelete = (fullKey) => {
   if (!getRemoteStoreUrl()) return;
-  clearTimeout(pendingPush.get(fullKey));
+  const prev = pendingPush.get(fullKey);
+  if (prev) clearTimeout(prev.timer);
   pendingPush.delete(fullKey);
-  fetch(remoteKeyUrl(fullKey), { method: 'DELETE' }).catch(() => { /* ignore */ });
+  fetch(remoteKeyUrl(fullKey), { method: 'DELETE', keepalive: true }).catch(() => { /* ignore */ });
 };
 
 /** 부팅 선주입 — 앱 마운트 전에 1회. 서버가 없거나 죽었으면 로컬로 진행한다. */
@@ -100,11 +129,14 @@ export async function hydrateFromRemote({ timeoutMs = 3000 } = {}) {
   }
 }
 
-/** 연결 직후 1회 — 지금 로컬에 있는 앱 키 전부를 서버로 올린다 */
-export function pushAllToRemote() {
+/** 연결 직후 1회 — "지금 로컬 상태를 서버의 시작점으로".
+ *  서버를 먼저 비운 뒤 올린다 — 업서트만 하면 서버에만 남아 있던 낡은 키가
+ *  살아남았다가 다음 부팅 선주입에서 유령 상태로 섞여 들어온다. */
+export async function pushAllToRemote() {
   const base = remoteBase();
   if (!base) return;
   try {
+    await fetch(`${base}/store`, { method: 'DELETE' }).catch(() => { /* 서버 없음 — 푸시도 어차피 실패 */ });
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (!k || !k.startsWith(`${NS}.`) || k === REMOTE_URL_KEY) continue;
@@ -148,9 +180,11 @@ export function clearAllPersisted() {
   try {
     const base = remoteBase();
     if (base) {
-      pendingPush.forEach((t) => clearTimeout(t));
+      pendingPush.forEach(({ timer }) => clearTimeout(timer));
       pendingPush.clear();
-      fetch(`${base}/store`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+      /* keepalive — 호출 직후 reload 로 문서가 언로드돼도 삭제 요청이 살아남아야
+         한다. 안 그러면 다음 부팅 선주입이 '지운' 데이터를 서버에서 되살린다 */
+      fetch(`${base}/store`, { method: 'DELETE', keepalive: true }).catch(() => { /* ignore */ });
     }
     const prefix = `${NS}.`;
     const doomed = [];

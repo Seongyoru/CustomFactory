@@ -620,9 +620,12 @@ export default function DigitalTwinDashboard() {
     setView('line');
   };
 
-  /** 비상 정지 — 지금 선택된 라인만 세우거나 해제한다 */
+  /** 비상 정지 — 지금 선택된 라인만 세우거나 해제한다.
+   *  권한은 실행 시점 상태로 재검사한다: 작동은 전원, 해제는 운영자 이상.
+   *  (버튼 게이트는 클릭 시점 평가라, 모달이 떠 있는 사이 상태가 바뀌는 틈을 여기서 막는다) */
   const handleEStopToggle = () => {
     const engaging = !eStopByLine[plant];
+    if (!can(engaging ? 'estop.engage' : 'estop.release')) return;
     setEStopByLine((prev) => ({ ...prev, [plant]: engaging }));
     logEvent(engaging ? 'ESTOP_ON' : 'ESTOP_OFF', `${lineNameOf(plant)} ${engaging ? '비상 정지' : '비상 정지 해제'}`, {
       lineId: plant,
@@ -636,6 +639,8 @@ export default function DigitalTwinDashboard() {
     setPlant(next);
     setSelectedId(null);
     setSelectedJobId(null);
+    /* 열려 있던 E-STOP 확인 모달은 이전 라인을 향한 것 — 라인이 바뀌면 무효화한다 */
+    setEStopModal(false);
   };
 
   const handleModeChange = (next) => {
@@ -765,6 +770,7 @@ export default function DigitalTwinDashboard() {
   };
 
   const handleAddMemo = (assetId, text) => {
+    if (!can('memo.write')) return; // UI disabled 와 별개의 핸들러 방어선 (인수인계와 동일 규약)
     const memo = { id: Date.now(), at: new Date(), text, author: session?.name };
     const key = memoKeyOf(plant, assetId); // 메모는 지금 보고 있는 라인의 호기에 붙는다
     setMemos((prev) => ({
@@ -1268,7 +1274,9 @@ export default function DigitalTwinDashboard() {
           resetHint={PERMISSION_HINTS['data.reset']}
           onClose={() => setReportModal(false)}
           onResetData={() => {
-            /* 데모 초기화 — 저장 데이터를 비우고 초기 상태로 재시작한다 */
+            /* 데모 초기화 — 저장 데이터를 비우고 초기 상태로 재시작한다.
+               UI 게이트와 별개로 핸들러에서도 방어한다 (원격 저장소까지 지우는 파괴적 동작) */
+            if (!can('data.reset')) return;
             clearAllPersisted();
             window.location.reload();
           }}

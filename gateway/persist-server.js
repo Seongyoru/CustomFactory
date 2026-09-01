@@ -87,11 +87,17 @@ createServer((req, res) => {
     return json(res, 200, { rev: store.rev });
   }
   if (req.method === 'PUT' && key !== '') {
-    let body = '';
+    /* Buffer 로 모아 마지막에 한 번만 디코드한다 — 청크마다 toString 하면
+       멀티바이트(한글) 문자가 TCP 청크 경계에서 U+FFFD 로 깨진 채 유효한
+       JSON 으로 저장되고, 부팅 선주입이 그 손상본을 전 브라우저에 퍼뜨린다.
+       상한도 코드유닛이 아닌 실제 바이트 기준이어야 한다. */
+    const chunks = [];
+    let bytes = 0;
     let over = false;
     req.on('data', (c) => {
-      body += c;
-      if (body.length > MAX_BODY && !over) {
+      chunks.push(c);
+      bytes += c.length;
+      if (bytes > MAX_BODY && !over) {
         over = true;
         json(res, 413, { error: 'too large' });
         req.destroy();
@@ -100,7 +106,7 @@ createServer((req, res) => {
     req.on('end', () => {
       if (over) return;
       try {
-        store.keys[key] = JSON.parse(body);
+        store.keys[key] = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       } catch {
         return json(res, 400, { error: 'invalid JSON' });
       }
