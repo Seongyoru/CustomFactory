@@ -4,17 +4,19 @@
  * =============================================================================
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity, FastForward, Gauge, GripVertical, Layers, Pause, Play, Plus, Save, Settings2, Trash2, Upload, X,
 } from 'lucide-react';
-import { completedEaAt, findAsset } from '../../data/factoryAssets.js';
-import { SIM_ASSUMPTIONS, probabilityBefore, simulateLine } from '../../lib/lineSimulation.js';
+import { completedEaAt } from '../../data/factoryAssets.js';
+import { probabilityBefore, simulateLine } from '../../lib/lineSimulation.js';
 import {
   SPEED_STEPS, fmtAnimScale, fmtClock, fmtDuration, fmtKoDuration, fmtSpeed, pad,
 } from '../../lib/format.js';
-import { AnimatedNumber, GhostButton, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
+import { AnimatedNumber, GhostButton, Modal, Panel, PanelTitle, StatusLamp } from '../ui.jsx';
 import { fmtShiftRemain, shiftOf, shiftRemainSec } from '../../lib/shift.js';
 import HandoverPanel from './HandoverPanel.jsx';
+import SimResultDetail from '../sim/SimResultDetail.jsx';
 
 /**
  * 실린더 충전 게이지 — 1세트마다 1칸씩 차고, 가득 차면 반출 후 새 실린더로 비워진다.
@@ -44,73 +46,11 @@ const CylinderGauge = ({ theme, cylinder }) => (
 );
 
 /**
- * 생산 진행 곡선(S-커브) — "그 시각에 몇 개까지 나와 있을까".
- *  로트 경계의 P50 완료 시각으로 누적 수량 곡선을 그리고, P90 을 점선 밴드로 겹친다.
- *  두 선의 벌어짐이 곧 계획의 불확실성이다.
+ * 목표 납기 기본값·min 용 datetime-local 문자열 (로컬 시간대) —
+ * toISOString() 은 UTC 로 밀려 한국에서 9시간 어긋난다.
  */
-const ProgressCurve = ({ theme, timeline, anchorMs }) => {
-  const W = 264;
-  const H = 96;
-  const plotH = 78;
-  const totalQty = timeline.reduce((s, r) => s + r.qty, 0);
-  const xMax = Math.max(1e-9, timeline[timeline.length - 1].endP90WallSec);
-  const xOf = (sec) => (sec / xMax) * (W - 8) + 4;
-  const yOf = (qty) => plotH - (qty / Math.max(1, totalQty)) * (plotH - 8);
-  let cum = 0;
-  const p50Pts = [[xOf(0), yOf(0)]];
-  const p90Pts = [[xOf(0), yOf(0)]];
-  timeline.forEach((r) => {
-    cum += r.qty;
-    p50Pts.push([xOf(r.endWallSec), yOf(cum)]);
-    p90Pts.push([xOf(r.endP90WallSec), yOf(cum)]);
-  });
-  const toStr = (pts) => pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="생산 진행 곡선">
-      <line x1="4" x2={W - 4} y1={plotH} y2={plotH} stroke="currentColor" strokeWidth="0.6" opacity="0.25" />
-      {/* P90 — 늦어질 수 있는 경로 */}
-      <polyline points={toStr(p90Pts)} fill="none" stroke={theme.accentHex} strokeWidth="1.1" strokeDasharray="3 3" opacity="0.45" />
-      {/* P50 — 기대 경로 */}
-      <polyline points={toStr(p50Pts)} fill="none" stroke={theme.accentHex} strokeWidth="1.6" />
-      {p50Pts.slice(1).map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r="2" fill={theme.accentHex} />
-      ))}
-      <text x="4" y={H - 2} fontSize="8" fill="currentColor" opacity="0.45">지금</text>
-      <text x={W - 4} y={H - 2} textAnchor="end" fontSize="8" fill="currentColor" opacity="0.45">
-        ~{fmtClock(new Date(anchorMs + xMax * 1000), false)}
-      </text>
-      <text x={W - 4} y="10" textAnchor="end" fontSize="8" fill="currentColor" opacity="0.55">
-        {totalQty} EA
-      </text>
-    </svg>
-  );
-};
-
-/** 시간 구성 스택바 — 남은 계획의 시간이 어디로 가는가 (표준시간 기준) */
-const TimeBreakdownBar = ({ theme, breakdown }) => {
-  const stop = Math.max(0, breakdown.stopMeanSec);
-  const total = Math.max(1e-9, breakdown.netSec + breakdown.overheadSec + stop);
-  const seg = (v) => `${(v / total) * 100}%`;
-  const rows = [
-    ['정미 생산', breakdown.netSec, theme.accentHex, 1],
-    ['도입·마무리', breakdown.overheadSec, theme.accentHex, 0.35],
-    ['돌발 정지(평균)', stop, '#ef4444', 0.85],
-  ];
-  return (
-    <div>
-      <div className={`flex h-2 rounded-full overflow-hidden ${theme.trackBg}`}>
-        {rows.map(([k, v, color, op]) => (
-          <span key={k} style={{ width: seg(v), backgroundColor: color, opacity: op }} title={`${k} ${fmtKoDuration(Math.round(v))}`} />
-        ))}
-      </div>
-      <div className={`mt-1 grid grid-cols-3 gap-1 text-[9px] tabular-nums ${theme.textFaint}`}>
-        {rows.map(([k, v]) => (
-          <span key={k} className="truncate">{k} {Math.round((v / total) * 100)}%</span>
-        ))}
-      </div>
-    </div>
-  );
-};
+const fmtDatetimeLocal = (d) =>
+  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
 const LeftDashboardPanel = ({
   theme, mode, jobs, onRequestCancel, onOpenJobAdd, onOpenExcel,
@@ -121,6 +61,7 @@ const LeftDashboardPanel = ({
   dailyTarget = 0, onSetDailyTarget,
   handoverNotes = [], onAddHandover, canWriteHandover = true, handoverHint,
   demoAutofill = true, onToggleAutofill,
+  panelHidden = false, // 전체 관제 등으로 패널이 CSS hidden 일 때 — body 포털 모달까지 함께 숨긴다
 }) => {
   /* 일일 목표 인라인 편집 (생산 계획 권한) */
   const [targetEdit, setTargetEdit] = useState(null); // null=보기, 문자열=편집 중
@@ -153,9 +94,11 @@ const LeftDashboardPanel = ({
    *  진행바는 연출이 아니라 '실제 반복 횟수'다 (결과에 계산 시간도 표기).
    */
   const [lineSim, setLineSim] = useState(null); // null | {progress:{done,total}} | {done, result}
-  const [dueTarget, setDueTarget] = useState(''); // 목표 납기 'HH:MM'
+  const [dueTarget, setDueTarget] = useState(''); // 목표 납기 'YYYY-MM-DDTHH:MM' (datetime-local)
+  const [resultOpen, setResultOpen] = useState(false); // 결과 상세 모달
   const simCancelRef = useRef(null);
   const startLineSim = () => {
+    setResultOpen(false);
     if (simCancelRef.current) {
       simCancelRef.current.cancelled = true;
       clearInterval(simCancelRef.current.timer);
@@ -212,7 +155,8 @@ const LeftDashboardPanel = ({
         });
         /* 기본 납기 목표 = 90% 신뢰 상한을 '분 올림'한 시각 —
            절사하면 P90 보다 이른 목표가 되어 표시 확률이 90% 아래로 어긋난다 */
-        setDueTarget(fmtClock(new Date(Math.ceil((now + result.finishWallSec.p90 * 1000) / 60000) * 60000), false));
+        setDueTarget(fmtDatetimeLocal(new Date(Math.ceil((now + result.finishWallSec.p90 * 1000) / 60000) * 60000)));
+        setResultOpen(true); // 완료 즉시 가운데 큰 팝업으로
       } else {
         setLineSim({ progress: { done: shown, total: RUNS } });
       }
@@ -224,6 +168,7 @@ const LeftDashboardPanel = ({
       clearInterval(simCancelRef.current.timer);
     }
     setLineSim(null);
+    setResultOpen(false);
   };
   useEffect(() => () => {
     if (simCancelRef.current) {
@@ -231,15 +176,27 @@ const LeftDashboardPanel = ({
       clearInterval(simCancelRef.current.timer);
     }
   }, []);
+  /* 라인·모드를 전환하면 결과·모달·납기 목표를 지운다 — 패널이 key 없이 재사용되므로
+     스테일 결과가 다른 라인 위에 뜨거나, 운전(1배속) 모드 위에 구배속으로 나눈 낙관적
+     완료 시각·모달이 남는 것을 막는다 (실행 중이던 계산도 함께 취소). */
+  useEffect(() => {
+    if (simCancelRef.current) {
+      simCancelRef.current.cancelled = true;
+      clearInterval(simCancelRef.current.timer);
+    }
+    setLineSim(null);
+    setResultOpen(false);
+    setSavedAnchor(null);
+    setDueTarget('');
+  }, [lineId, mode]);
 
-  /** 목표 납기(HH:MM)를 앵커 기준 초로 바꿔 달성 확률을 계산한다 */
+  /** 목표 납기(날짜+시각)를 앵커 기준 초로 바꿔 달성 확률을 계산한다.
+   *  datetime-local 문자열은 로컬 시간대로 파싱된다. min 속성이 과거 선택을 막지만,
+   *  직접 타이핑으로 과거가 들어오면 확률 0%로 정직하게 보여준다. */
   const dueProbabilityOf = (r) => {
     if (!dueTarget) return null;
-    const [h, m] = dueTarget.split(':').map(Number);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
-    const target = new Date(r.anchorMs);
-    target.setHours(h, m, 0, 0);
-    if (target.getTime() <= r.anchorMs) target.setDate(target.getDate() + 1); // 지난 시각은 다음날로
+    const target = new Date(dueTarget);
+    if (Number.isNaN(target.getTime())) return null;
     return probabilityBefore(r.totalsWallSorted, (target.getTime() - r.anchorMs) / 1000);
   };
 
@@ -604,9 +561,7 @@ const LeftDashboardPanel = ({
             <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
               <div className="flex items-center justify-between text-[11px]">
                 <span className={theme.textMuted}>시뮬레이션 실행 중</span>
-                <span className={`font-bold tabular-nums ${theme.accentText}`}>
-                  {lineSim.progress.done.toLocaleString()} / {lineSim.progress.total.toLocaleString()}회
-                </span>
+                <span className={`inline-block w-2 h-2 rounded-full animate-pulse ${theme.accentBg}`} />
               </div>
               <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${theme.trackBg}`}>
                 <div
@@ -619,12 +574,13 @@ const LeftDashboardPanel = ({
 
           {lineSim?.done && (() => {
             const r = lineSim.result;
-            const risky = r.consumables.filter((c) => !c.ok);
-            const maxBin = Math.max(1, ...r.histogram.bins);
-            const sens = r.sensitivity;
+            const dueProb = dueProbabilityOf(r);
+            const duePct = dueProb === null ? null : Math.round(dueProb * 100);
+            const dueTone = duePct === null ? theme.textGhost
+              : duePct >= 90 ? 'text-emerald-500' : duePct >= 50 ? 'text-amber-500' : 'text-red-500';
             return (
-              <div className="space-y-2">
-                {/* 완료 시각 — 중앙값 + 90% 신뢰 상한 */}
+              <>
+                {/* 패널에는 요점만 — 상세는 가운데 큰 팝업에서 */}
                 <div className={`rounded-lg border ${theme.panelBorder} ${theme.accentBgSoft} px-3 py-2.5`}>
                   <div className="flex items-baseline justify-between">
                     <span className={`text-[10px] ${theme.textFaint}`}>완료 예정 (중앙값)</span>
@@ -635,231 +591,115 @@ const LeftDashboardPanel = ({
                   <p className={`mt-0.5 text-[20px] font-bold tabular-nums leading-none ${theme.accentText}`}>
                     {fmtClock(r.finishAtP50, false)}
                   </p>
-
-                  {/* 완료 시간 분포 히스토그램 — 2,000회의 흩어짐 */}
-                  <div className="mt-2 flex items-end gap-[1px] h-9" aria-label="완료 시간 분포">
-                    {r.histogram.bins.map((b, i) => (
-                      <span
-                        key={i}
-                        className="flex-1 rounded-t-[2px]"
-                        style={{
-                          height: `${Math.max(4, (b / maxBin) * 100)}%`,
-                          backgroundColor: theme.accentHex,
-                          opacity: b === 0 ? 0.12 : 0.35 + 0.65 * (b / maxBin),
-                        }}
-                        title={`${b}회`}
-                      />
-                    ))}
-                  </div>
-                  <div className={`mt-0.5 flex justify-between text-[9px] tabular-nums ${theme.textGhost}`}>
-                    <span>{fmtKoDuration(r.histogram.minSec)}</span>
-                    <span>소요 분포</span>
-                    <span>{fmtKoDuration(r.histogram.maxSec)}</span>
-                  </div>
-
-                  {/* 교대·금일 연계 확률 — "이 계획, 우리 조에서 끝나나?" */}
-                  {(() => {
-                    const anchor = new Date(r.anchorMs);
-                    const shiftEndSec = (shiftOf(anchor).endAt.getTime() - r.anchorMs) / 1000;
-                    const midnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 1);
-                    const midnightSec = (midnight.getTime() - r.anchorMs) / 1000;
-                    const pShift = probabilityBefore(r.totalsWallSorted, shiftEndSec);
-                    const pToday = probabilityBefore(r.totalsWallSorted, midnightSec);
-                    const chip = (label, p) => (
-                      <span
-                        className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold tabular-nums
-                          ${p >= 0.9 ? 'text-emerald-500 border-emerald-500/40 bg-emerald-500/10'
-                            : p >= 0.5 ? `${theme.chip}`
-                            : 'text-amber-500 border-amber-500/40 bg-amber-500/10'}`}
-                      >
-                        {label} {Math.round(p * 100)}%
-                      </span>
-                    );
-                    return (
-                      <div className="mt-2 flex items-center gap-1.5">
-                        {chip(`${shiftOf(anchor).label} 내 완료`, pShift)}
-                        {chip('금일 내 완료', pToday)}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* 생산 진행 곡선 — 시각별 누적 완성 수량 (P50 실선 · P90 점선) */}
-                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2 ${theme.textSecondary}`}>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <p className={`text-[10px] font-bold ${theme.textMuted}`}>생산 진행 곡선</p>
-                    <p className={`text-[9px] ${theme.textGhost}`}>실선 P50 · 점선 P90 — 벌어질수록 불확실</p>
-                  </div>
-                  <ProgressCurve theme={theme} timeline={r.timeline} anchorMs={r.anchorMs} />
-                </div>
-
-                {/* 시간 구성 — 남은 계획의 시간이 어디로 가는가 */}
-                {r.breakdown && (
-                  <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-                    <div className="flex items-baseline justify-between mb-1.5">
-                      <p className={`text-[10px] font-bold ${theme.textMuted}`}>시간 구성 (표준시간 기준)</p>
-                      <p className={`text-[9px] tabular-nums ${theme.textGhost}`}>
-                        사이클 편차 평균 {r.breakdown.jitterMeanSec >= 0 ? '+' : '−'}{fmtKoDuration(Math.round(Math.abs(r.breakdown.jitterMeanSec)))}
-                      </p>
-                    </div>
-                    <TimeBreakdownBar theme={theme} breakdown={r.breakdown} />
-                    <p className={`mt-1.5 text-[10px] leading-relaxed tabular-nums ${theme.textFaint}`}>
-                      돌발 정지 평균 <b>{r.breakdown.stopMeanCount.toFixed(1)}회 · {fmtKoDuration(Math.round(r.breakdown.stopMeanSec))}</b> 손실
-                      {r.breakdown.stopP90Sec > r.breakdown.stopMeanSec
-                        ? <> — 운 나쁜 날(상위 10%)은 {fmtKoDuration(Math.round(r.breakdown.stopP90Sec))} 이상, 최악 {r.breakdown.stopMaxCount}회까지.</>
-                        : <> — 10회 중 9회는 정지 없이 통과하지만, 최악 {r.breakdown.stopMaxCount}회까지 발생했습니다.</>}
-                    </p>
-                  </div>
-                )}
-
-                {/* ① 로트별 간트 타임라인 — P50 시작~종료 띠 + P90 리스크 수염 */}
-                <div className={`rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-                  <p className={`text-[10px] font-bold mb-1.5 ${theme.textMuted}`}>로트별 타임라인 (P50)</p>
-                  <div className="space-y-1">
-                    {r.timeline.map((row) => {
-                      const span = Math.max(1e-9, r.timeline[r.timeline.length - 1].endP90WallSec);
-                      const left = (row.startWallSec / span) * 100;
-                      const width = Math.max(1.5, ((row.endWallSec - row.startWallSec) / span) * 100);
-                      const whisker = ((row.endP90WallSec - row.endWallSec) / span) * 100;
-                      return (
-                        <div
-                          key={row.id}
-                          className="flex items-center gap-1.5"
-                          title={`${row.name} · ${row.qty} EA · ${fmtClock(new Date(r.anchorMs + row.endWallSec * 1000), false)} 완료 예정 (90%: ${fmtClock(new Date(r.anchorMs + row.endP90WallSec * 1000), false)})`}
-                        >
-                          <span className={`w-8 shrink-0 text-[9px] tabular-nums truncate ${theme.textFaint}`}>
-                            {String(row.id).split('-').pop()}
-                          </span>
-                          <span className={`relative flex-1 h-2 rounded-sm overflow-hidden ${theme.trackBg}`}>
-                            <span
-                              className="absolute inset-y-0 rounded-sm"
-                              style={{ left: `${left}%`, width: `${width}%`, backgroundColor: theme.accentHex, opacity: 0.85 }}
-                            />
-                            {/* P90 리스크 수염 — 늦어질 수 있는 범위 */}
-                            <span
-                              className="absolute inset-y-0"
-                              style={{ left: `${left + width}%`, width: `${whisker}%`, backgroundColor: theme.accentHex, opacity: 0.25 }}
-                            />
-                          </span>
-                          <span className={`w-9 shrink-0 text-right text-[9px] tabular-nums ${theme.textSecondary}`}>
-                            {fmtClock(new Date(r.anchorMs + row.endWallSec * 1000), false)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* ② 목표 납기 → 달성 확률 */}
-                {(() => {
-                  const prob = dueProbabilityOf(r);
-                  const pct = prob === null ? null : Math.round(prob * 100);
-                  const tone = pct === null ? theme.textGhost : pct >= 90 ? 'text-emerald-500' : pct >= 50 ? 'text-amber-500' : 'text-red-500';
-                  return (
-                    <div className={`flex items-center gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
-                      <span className={`text-[10px] shrink-0 ${theme.textMuted}`}>목표 납기</span>
-                      <input
-                        type="time"
-                        value={dueTarget}
-                        onChange={(e) => setDueTarget(e.target.value)}
-                        className={`h-6 px-1.5 rounded border text-[11px] tabular-nums ${theme.panelBorder} ${theme.inputBg} ${theme.textPrimary}
-                          focus:outline-none focus:ring-2 ${theme.accentRing}`}
-                      />
-                      <span className={`ml-auto text-[12px] font-bold tabular-nums ${tone}`}>
-                        {pct === null ? '—' : `달성 확률 ${pct}%`}
-                      </span>
-                    </div>
-                  );
-                })()}
-
-                {/* 산출 요약 */}
-                <div className={`grid grid-cols-3 gap-1.5 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-2 py-2 text-center`}>
-                  {[
-                    ['생산', `${r.summary.totalQty} EA`],
-                    ['예상 불량', `~${r.defects.mean} EA`],
-                    ['반출 실린더', `${r.summary.cylinders}개`],
-                  ].map(([k, v]) => (
-                    <div key={k}>
-                      <p className={`text-[10px] ${theme.textFaint}`}>{k}</p>
-                      <p className={`mt-0.5 text-[12px] font-semibold tabular-nums ${theme.textSecondary}`}>{v}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {/* ③ 로트 순서 최적화 제안 — SPT (진행 중인 선두는 고정) */}
-                {r.orderSuggestion.improvable ? (
-                  <div className={`flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2`}>
-                    <p className="flex-1 text-[10px] leading-relaxed tabular-nums text-amber-600">
-                      짧은 로트 우선 정렬 시 로트당 평균{' '}
-                      <b>{fmtKoDuration(r.orderSuggestion.savedAvgSec / r.speed)}</b> 먼저 완료됩니다
-                    </p>
-                    <button
-                      type="button"
-                      disabled={!canManageJobs}
-                      title={!canManageJobs ? manageHint : '대기 로트를 짧은 순으로 재정렬합니다 (진행 중인 로트는 그대로)'}
-                      onClick={() => {
-                        onApplyOrder?.(r.orderSuggestion.order);
-                        stopLineSim(); // 순서가 바뀌면 결과가 낡으므로 지운다
-                      }}
-                      className={`shrink-0 h-7 px-2.5 rounded-md text-[10px] font-bold text-white ${theme.accentBg}
-                        hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
-                    >
-                      정렬 적용
-                    </button>
-                  </div>
-                ) : (
-                  jobs.length > 2 && (
-                    <p className="text-[10px] leading-relaxed text-emerald-500">
-                      ✓ 현재 생산 순서가 이미 최적입니다 (짧은 로트 우선)
-                    </p>
-                  )
-                )}
-
-                {/* 병목 개선 민감도 — what-if */}
-                <p className={`text-[10px] leading-relaxed tabular-nums ${theme.textMuted}`}>
-                  병목 <b className={theme.textSecondary}>{findAsset(sens.bottleneckId)?.nameKo}</b>{' '}
-                  {Math.round(sens.improve * 100)}% 개선 시{' '}
-                  <b className={theme.accentText}>−{fmtKoDuration(sens.savedSec / r.speed)}</b>
-                  {sens.newBottleneckId && (
-                    <> · 새 병목: {findAsset(sens.newBottleneckId)?.nameKo}</>
+                  <button
+                    type="button"
+                    onClick={() => setResultOpen(true)}
+                    className={`mt-2 w-full h-8 rounded-lg text-[11px] font-bold text-white transition
+                      ${theme.accentBg} hover:opacity-90`}
+                  >
+                    결과 상세 보기
+                  </button>
+                  {savedAnchor === r.anchorMs && (
+                    <p className="mt-1.5 text-center text-[10px] text-emerald-500">✓ 리포트에 저장됨</p>
                   )}
-                </p>
+                </div>
 
-                {/* 소모품 리스크 */}
-                {risky.length > 0 ? (
-                  risky.map((c) => (
-                    <p key={c.assetId} className="text-[10px] leading-relaxed tabular-nums text-red-500">
-                      ⚠ {findAsset(c.assetId)?.nameKo} {c.label} {c.percent}% — 약 {c.remainingEa} EA 후
-                      소진 (잔여 계획 {c.neededEa} EA), {fmtClock(c.replaceAt, false)}경 교체 필요
-                    </p>
-                  ))
-                ) : (
-                  <p className="text-[10px] leading-relaxed text-emerald-500">
-                    ✓ 소모품 전 항목 잔여 계획 완주 가능
-                  </p>
+                {/* 결과 상세 — 좌측 패널 조상의 필터/스크롤에 갇히지 않게 body 포털.
+                    포털은 패널의 CSS hidden 을 탈출하므로 전체 관제 뷰에서는 직접 눌러 숨긴다 */}
+                {resultOpen && !panelHidden && createPortal(
+                  <Modal theme={theme} onClose={() => setResultOpen(false)} className="w-[900px] max-w-[94vw]">
+                    <div className={`flex items-center justify-between px-4 py-3 border-b ${theme.panelBorder}`}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Activity className={`w-4 h-4 shrink-0 ${theme.accentText}`} />
+                        <h3 className={`text-sm font-bold truncate ${theme.textPrimary}`}>라인 시뮬레이션 결과</h3>
+                        <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded border tabular-nums ${theme.chip}`}>
+                          몬테카를로 {r.runs.toLocaleString()}회
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setResultOpen(false)}
+                        className={`grid place-items-center w-7 h-7 rounded-md ${theme.textMuted} ${theme.hoverBg}`}
+                        aria-label="닫기"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="p-4 max-h-[78vh] overflow-y-auto">
+                      <SimResultDetail
+                        theme={theme}
+                        r={r}
+                        dueSlot={
+                          /* 목표 납기(날짜+시각) → 달성 확률 — min 으로 과거 선택 차단 */
+                          <div className={`flex items-center flex-wrap gap-2 rounded-lg border ${theme.panelBorder} ${theme.subtleBg} px-3 py-2`}>
+                            <span className={`text-[10px] shrink-0 ${theme.textMuted}`}>목표 납기</span>
+                            <input
+                              type="datetime-local"
+                              value={dueTarget}
+                              min={fmtDatetimeLocal(new Date(r.anchorMs))}
+                              onChange={(e) => setDueTarget(e.target.value)}
+                              className={`h-6 px-1.5 rounded border text-[11px] tabular-nums ${theme.panelBorder} ${theme.inputBg} ${theme.textPrimary}
+                                focus:outline-none focus:ring-2 ${theme.accentRing}`}
+                            />
+                            <span className={`ml-auto text-[12px] font-bold tabular-nums ${dueTone}`}>
+                              {duePct === null ? '—' : `달성 확률 ${duePct}%`}
+                            </span>
+                          </div>
+                        }
+                        actionSlot={
+                          <div className="space-y-2">
+                            {/* 로트 순서 최적화 제안 — SPT (진행 중인 선두는 고정) */}
+                            {r.orderSuggestion.improvable ? (
+                              <div className={`flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2`}>
+                                <p className="flex-1 text-[10px] leading-relaxed tabular-nums text-amber-600">
+                                  짧은 로트 우선 정렬 시 로트당 평균{' '}
+                                  <b>{fmtKoDuration(r.orderSuggestion.savedAvgSec / r.speed)}</b> 먼저 완료됩니다
+                                </p>
+                                <button
+                                  type="button"
+                                  disabled={!canManageJobs}
+                                  title={!canManageJobs ? manageHint : '대기 로트를 짧은 순으로 재정렬합니다 (진행 중인 로트는 그대로)'}
+                                  onClick={() => {
+                                    onApplyOrder?.(r.orderSuggestion.order);
+                                    stopLineSim(); // 순서가 바뀌면 결과가 낡으므로 지운다
+                                  }}
+                                  className={`shrink-0 h-7 px-2.5 rounded-md text-[10px] font-bold text-white ${theme.accentBg}
+                                    hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed`}
+                                >
+                                  정렬 적용
+                                </button>
+                              </div>
+                            ) : (
+                              jobs.length > 2 && (
+                                <p className="text-[10px] leading-relaxed text-emerald-500">
+                                  ✓ 현재 생산 순서가 이미 최적입니다 (짧은 로트 우선)
+                                </p>
+                              )
+                            )}
+
+                            {/* 스냅샷 저장 — 리포트 센터 '시뮬레이션' 탭에서 계획끼리 비교한다.
+                                공유 저장소(30건 캡)를 덮어쓰는 조작이라 정렬 적용과 같은 권한으로 잠근다 */}
+                            <GhostButton
+                              icon={Save}
+                              theme={theme}
+                              className="w-full"
+                              disabled={!canManageJobs || savedAnchor === r.anchorMs}
+                              title={!canManageJobs ? manageHint : undefined}
+                              onClick={() => {
+                                onSaveSnapshot?.(r);
+                                setSavedAnchor(r.anchorMs);
+                              }}
+                            >
+                              {savedAnchor === r.anchorMs ? '리포트에 저장됨 ✓' : '리포트에 스냅샷 저장'}
+                            </GhostButton>
+                          </div>
+                        }
+                      />
+                    </div>
+                  </Modal>,
+                  document.body
                 )}
-
-                {/* 스냅샷 저장 — 리포트 센터 '시뮬레이션' 탭에서 계획끼리 비교한다.
-                    공유 저장소(30건 캡)를 덮어쓰는 조작이라 정렬 적용과 같은 권한으로 잠근다 */}
-                <GhostButton
-                  icon={Save}
-                  theme={theme}
-                  className="w-full"
-                  disabled={!canManageJobs || savedAnchor === r.anchorMs}
-                  title={!canManageJobs ? manageHint : undefined}
-                  onClick={() => {
-                    onSaveSnapshot?.(r);
-                    setSavedAnchor(r.anchorMs);
-                  }}
-                >
-                  {savedAnchor === r.anchorMs ? '리포트에 저장됨 ✓' : '리포트에 스냅샷 저장'}
-                </GhostButton>
-
-                <p className={`text-[9px] tabular-nums ${theme.textGhost}`}>
-                  몬테카를로 {r.runs.toLocaleString()}회 · {r.tookMs}ms · 사이클 편차 ±3% ·
-                  돌발 정지 {SIM_ASSUMPTIONS.microStopProbPerEa * 100}%/EA · ×{fmtSpeed(r.speed)} 배속 기준
-                </p>
-              </div>
+              </>
             );
           })()}
 

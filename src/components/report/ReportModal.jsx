@@ -12,6 +12,7 @@
  * ---------------------------------------------------------------------------
  */
 import React, { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity, AlertOctagon, BarChart3, FileDown, ListChecks, Printer, ScrollText, Siren, Trash2, Wrench, X,
 } from 'lucide-react';
@@ -26,6 +27,7 @@ import { EVENT_TYPES, eventLabel } from '../../lib/events.js';
 import { fmtClock, fmtDate, fmtDuration, fmtKoDuration, fmtSpeed } from '../../lib/format.js';
 import { downloadReportWorkbook } from '../../lib/reportExcel.js';
 import { Modal } from '../ui.jsx';
+import SimResultDetail from '../sim/SimResultDetail.jsx';
 
 const TONE_CHIP = {
   red: 'text-red-500 border-red-500/40 bg-red-500/10',
@@ -286,6 +288,8 @@ const ReportModal = ({
     .filter(Boolean);
   /* 스냅샷 삭제는 되돌릴 수 없다 — 첫 클릭은 무장, 두 번째 클릭이 실제 삭제 */
   const [armedDelete, setArmedDelete] = useState(null);
+  /* 스냅샷 상세 — 저장 시 굳힌 detail 페이로드를 라이브와 같은 화면으로 펼친다 */
+  const [detailSnap, setDetailSnap] = useState(null);
 
   /* 라인별 OEE */
   const oeeByLine = useMemo(() => {
@@ -765,18 +769,20 @@ const ReportModal = ({
               );
             })()}
 
+            {/* 12컬럼이 880px 폭에 빠듯하다 — 넘치면 잘리는 대신 가로 스크롤로 살린다 */}
             <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+              <div className="overflow-x-auto">
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
                   <tr className={`border-b ${theme.divider}`}>
-                    {['비교', '저장 시각', '라인', '로트', '수량', 'P50 소요', '완료 예정', '배속', '불량', '저장자', ''].map((h) => (
-                      <th key={h} className={th}>{h}</th>
+                    {['비교', '저장 시각', '라인', '로트', '수량', 'P50 소요', '완료 예정', '배속', '불량', '저장자', '상세', ''].map((h, i) => (
+                      <th key={i} className={th}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {simSnapshots.length === 0 && (
-                    <tr><td colSpan={11} className={`px-3 py-6 text-center ${theme.textFaint}`}>
+                    <tr><td colSpan={12} className={`px-3 py-6 text-center ${theme.textFaint}`}>
                       저장된 스냅샷이 없습니다. 라인 시뮬레이션 결과에서 "리포트에 스냅샷 저장"을 누르면 여기에 쌓입니다.
                     </td></tr>
                   )}
@@ -800,6 +806,18 @@ const ReportModal = ({
                       <td className={`${td} tabular-nums ${theme.textFaint}`}>×{fmtSpeed(s.speed ?? 1)}</td>
                       <td className={`${td} tabular-nums ${theme.textFaint}`}>~{s.defectsMean} EA</td>
                       <td className={`${td} ${theme.textFaint}`}>{s.user ?? '-'}</td>
+                      <td className="px-2 py-1.5">
+                        <button
+                          type="button"
+                          disabled={!s.detail}
+                          onClick={() => setDetailSnap(s)}
+                          title={s.detail ? '그래프가 포함된 상세 결과를 봅니다' : '상세 데이터 없음 — 구버전이거나, 최근 10건 이후로 밀려 그래프 상세가 정리된 스냅샷입니다'}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded border transition whitespace-nowrap
+                            ${s.detail ? `${theme.chip} hover:opacity-80` : `${theme.textGhost} border-transparent cursor-not-allowed`}`}
+                        >
+                          상세
+                        </button>
+                      </td>
                       <td className="px-2 py-1.5">
                         {canManageSnapshots && (
                           armedDelete === s.id ? (
@@ -835,7 +853,43 @@ const ReportModal = ({
                   ))}
                 </tbody>
               </table>
+              </div>
             </section>
+
+            {/* 스냅샷 상세 모달 — 라이브 결과와 같은 화면(SimResultDetail)을 저장본으로 렌더.
+                리포트 모달의 backdrop-filter 가 fixed 의 기준이 되지 않게 body 포털.
+                렌더마다 라이브 목록에서 재조회한다 — 삭제·30건 캡 축출된 스냅샷을
+                계속 보여주지 않게 (compareIds 의 고아 id 필터와 같은 이유). */}
+            {(() => {
+              const live = detailSnap && simSnapshots.find((s) => s.id === detailSnap.id);
+              return live?.detail && createPortal(
+              <Modal theme={theme} onClose={() => setDetailSnap(null)} className="w-[900px] max-w-[94vw]">
+                <div className={`flex items-center justify-between px-4 py-3 border-b ${theme.panelBorder}`}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Activity className={`w-4 h-4 shrink-0 ${theme.accentText}`} />
+                    <h3 className={`text-sm font-bold truncate ${theme.textPrimary}`}>
+                      시뮬레이션 스냅샷 상세 — {lineName(live.lineId)}
+                    </h3>
+                    <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded border tabular-nums ${theme.chip}`}>
+                      {fmtDate(new Date(live.at))} {fmtClock(new Date(live.at))} 저장 · {live.user ?? '-'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDetailSnap(null)}
+                    className={`grid place-items-center w-7 h-7 rounded-md ${theme.textMuted} ${theme.hoverBg}`}
+                    aria-label="닫기"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="p-4 max-h-[78vh] overflow-y-auto">
+                  <SimResultDetail theme={theme} r={live.detail} />
+                </div>
+              </Modal>,
+              document.body
+              );
+            })()}
           </>
         )}
 

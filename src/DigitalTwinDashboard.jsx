@@ -60,6 +60,7 @@ import { useMaintenance } from './hooks/useMaintenance.js';
 import { useEnergy } from './hooks/useEnergy.js';
 import { linePowerKw } from './lib/energy.js';
 import { shiftOf } from './lib/shift.js';
+import { probabilityBefore } from './lib/lineSimulation.js';
 import {
   CONSUMABLE_WARN_PCT, consumableAlarmOf, withLiveConsumable, withMaintHistory,
 } from './lib/maintenance.js';
@@ -757,10 +758,21 @@ export default function DigitalTwinDashboard() {
   };
 
   /** 시뮬레이션 결과를 스냅샷으로 저장 — 리포트 센터의 '시뮬레이션' 탭에서 비교한다.
-   *  표·비교 카드·엑셀이 읽는 필드만 저장한다 (localStorage 30건 공유 저장소).
+   *  표·비교 카드·엑셀이 읽는 필드 + 상세 보기(detail)를 저장한다 (localStorage 30건 공유 저장소).
+   *  detail 은 2천 개 분포 원본(totalsWallSorted)을 버리고 그래프에 필요한 요약만 담는다 —
+   *  교대·금일 확률은 분포가 없으면 재계산할 수 없으므로 저장 시점에 계산해 함께 굳힌다.
    *  ※ p50Sec/p90Sec 는 배속으로 나눈 벽시계 초 — 배속이 다른 스냅샷과 비교할 땐 단위가 다르다. */
   const handleSaveSimSnapshot = (r) => {
     if (!can('jobs.manage')) return; // 게스트는 공유 스냅샷 저장소를 덮어쓸 수 없다
+    const anchor = new Date(r.anchorMs);
+    const sh = shiftOf(anchor);
+    const midnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 1);
+    /* detail 의 수치는 저장 전에 반올림한다 — 배정밀도 원본(값당 ~18자)을 그대로 두면
+       스냅샷 1건이 ~3KB, 30건 캡 만충 시 simSnapshots 키가 persist keepalive 예산
+       (60KB, 언로드 플러시의 전송 보장 한계)을 넘어 종료 직전 저장이 유실·롤백된다.
+       0.1초/0.001kWh 정밀도는 화면 표기(분·소수 1자리)보다 이미 충분히 곱다. */
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const r3 = (v) => Math.round(v * 1000) / 1000;
     const snap = {
       id: `SIM-${Date.now()}`,
       at: new Date().toISOString(),
@@ -774,8 +786,68 @@ export default function DigitalTwinDashboard() {
       p90Sec: r.finishWallSec.p90,
       finishAtP50: r.finishAtP50.toISOString(),
       defectsMean: r.defects.mean,
+      detail: {
+        anchorMs: r.anchorMs,
+        runs: r.runs,
+        tookMs: r.tookMs,
+        speed: r.speed,
+        summary: r.summary,
+        finishAtP50: r.finishAtP50.toISOString(),
+        finishAtP90: r.finishAtP90.toISOString(),
+        histogram: { bins: r.histogram.bins, minSec: r1(r.histogram.minSec), maxSec: r1(r.histogram.maxSec) },
+        timeline: r.timeline.map((t) => ({
+          ...t,
+          startWallSec: r1(t.startWallSec),
+          endWallSec: r1(t.endWallSec),
+          endP90WallSec: r1(t.endP90WallSec),
+        })),
+        breakdown: {
+          netSec: r1(r.breakdown.netSec),
+          overheadSec: r1(r.breakdown.overheadSec),
+          jitterMeanSec: r1(r.breakdown.jitterMeanSec),
+          stopMeanSec: r1(r.breakdown.stopMeanSec),
+          stopP90Sec: r1(r.breakdown.stopP90Sec),
+          stopMeanCount: r3(r.breakdown.stopMeanCount),
+          stopMaxCount: r.breakdown.stopMaxCount,
+        },
+        energy: {
+          nominalKw: r3(r.energy.nominalKw),
+          kwhP50: r3(r.energy.kwhP50),
+          kwhP90: r3(r.energy.kwhP90),
+          co2P50Kg: r3(r.energy.co2P50Kg),
+          co2P90Kg: r3(r.energy.co2P90Kg),
+        },
+        manning: {
+          ...r.manning,
+          manHoursP50: r3(r.manning.manHoursP50),
+          manHoursP90: r3(r.manning.manHoursP90),
+        },
+        defects: r.defects,
+        sensitivity: {
+          ...r.sensitivity,
+          newPeriodF: r1(r.sensitivity.newPeriodF),
+          savedSec: r1(r.sensitivity.savedSec),
+          savedPct: r3(r.sensitivity.savedPct),
+        },
+        consumables: r.consumables.map((c) => ({
+          ...c,
+          percent: r1(c.percent),
+          runOutSec: c.runOutSec == null ? c.runOutSec : r1(c.runOutSec),
+          ...(c.replaceAt ? { replaceAt: c.replaceAt.toISOString() } : {}),
+        })),
+        pShift: r3(probabilityBefore(r.totalsWallSorted, (sh.endAt.getTime() - r.anchorMs) / 1000)),
+        pToday: r3(probabilityBefore(r.totalsWallSorted, (midnight.getTime() - r.anchorMs) / 1000)),
+        shiftLabel: sh.label,
+      },
     };
-    setSimSnapshots((prev) => [snap, ...prev].slice(0, 30));
+    /* 반올림해도 로트가 많은 큐에서는 30건 × detail 이 keepalive 예산을 넘을 수 있다 —
+       그래프 상세는 최근 10건만 유지하고, 그 밖은 비교표가 읽는 요약 필드만 남긴다. */
+    const DETAIL_KEEP = 10;
+    setSimSnapshots((prev) => [snap, ...prev].slice(0, 30).map((s, i) => {
+      if (i < DETAIL_KEEP || !s.detail) return s;
+      const { detail: _dropped, ...rest } = s;
+      return rest;
+    }));
     logEvent('SIM_SNAPSHOT', `시뮬레이션 스냅샷 저장 — ${snap.totalQty} EA · P50 ${fmtDuration(Math.round(snap.p50Sec))}`, {
       lineId: plant,
     });
@@ -1098,6 +1170,7 @@ export default function DigitalTwinDashboard() {
           }}
           canWriteHandover={can('memo.write')}
           handoverHint={PERMISSION_HINTS['memo.write']}
+          panelHidden={view === 'overview'}
         />
 
         <TwinViewport

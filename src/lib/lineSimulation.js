@@ -20,6 +20,8 @@ import {
   completedEaAt,
   loadPlanFor,
 } from '../data/factoryAssets.js';
+import { TELEMETRY_BASELINES } from '../telemetry/simulatedSource.js';
+import { CO2_KG_PER_KWH, linePowerKw } from './energy.js';
 
 /* 로드당 오버헤드(도입 140f + 출발 45f) — 프레임. 반복 수와 무관하게 일정하다 */
 const LOAD_OVERHEAD_F = 185;
@@ -51,6 +53,14 @@ export const CONSUMABLE_WEAR_PER_EA = {
   POLY_ROBOT: 0.006,
   POPUP_UNIT: 0.01,
 };
+
+/**
+ * 인력 배치 가정 (교대당, 데모 가정) — 자동화 라인이라 상주는 소수.
+ *  operator 라인 운전·이상 대응 / material 원자재 투입(컨베이어 로드) /
+ *  quality 품질 확인(간헐 상주 0.5 = 두 라인 공유).
+ *  실공장 적용 시 표준 작업표의 공수로 교체한다.
+ */
+export const MANNING_ASSUMPTIONS = { operator: 1, material: 1, quality: 0.5 };
 
 /** 반복 구간에서 각 설비가 EA 1개에 쓰는 프레임 — 병목 민감도의 근거 */
 export const STAGE_FRAMES = {
@@ -392,10 +402,29 @@ export function simulateLine({
         bins[Math.min(BINS - 1, Math.floor(((s - min) / span) * BINS))] += 1;
       });
 
+      /* 전력·인력 — '계획을 완주하는 데 드는 자원'. 배속은 보는 속도일 뿐이므로
+         kWh·공수는 표준시간(배속 미적용 초)으로 적산해야 실공정 값이 된다. */
+      const p50StdSec = quantile(totals, 0.5);
+      const p90StdSec = quantile(totals, 0.9);
+      const nominalKw = linePowerKw(TELEMETRY_BASELINES); // 설비 기준 전류 합의 3상 근사
+      const headcount = Object.values(MANNING_ASSUMPTIONS).reduce((s, v) => s + v, 0);
+      const summary = planSummary(lots, { carryFill, headDoneEa });
+      /* 자재 투입(잔여) — 선두 로트에서 이미 시작된 로드는 뺀다. 같은 카드의 공수·kWh 가
+         '남은 계획' 표준초 기준이므로 투입 횟수만 전체 계획이면 좌표계가 어긋난다
+         (planSummary 의 cylinders 가 잔여 기준인 것과 같은 이유). */
+      let fedLoads = 0;
+      if (head && headDoneEa > 0) {
+        let cum = 0;
+        loadPlanFor(head.qty).forEach((sz) => {
+          if (headDoneEa > cum) fedLoads += 1;
+          cum += sz;
+        });
+      }
+
       resolve({
         runs,
         tookMs: Math.max(1, Math.round(performance.now() - t0)),
-        summary: planSummary(lots, { carryFill, headDoneEa }),
+        summary,
         finishWallSec: {
           p50: wall(quantile(totals, 0.5)),
           p90: wall(quantile(totals, 0.9)),
@@ -420,6 +449,22 @@ export function simulateLine({
           stopP90Sec: quantile([...stopSecPerRun].sort((a, b) => a - b), 0.9),
           stopMeanCount: stopCountPerRun.reduce((s, v) => s + v, 0) / runs,
           stopMaxCount: Math.max(...stopCountPerRun),
+        },
+        /** 전력 소모 전망 — 정격(kW) × 가동 시간. 실계측 전력계 연동 전의 데모 가정 */
+        energy: {
+          nominalKw,
+          kwhP50: (nominalKw * p50StdSec) / 3600,
+          kwhP90: (nominalKw * p90StdSec) / 3600,
+          co2P50Kg: ((nominalKw * p50StdSec) / 3600) * CO2_KG_PER_KWH,
+          co2P90Kg: ((nominalKw * p90StdSec) / 3600) * CO2_KG_PER_KWH,
+        },
+        /** 인력 배치 전망 — 교대당 상주 가정 × 가동 시간 = 투입 공수 */
+        manning: {
+          perShift: { ...MANNING_ASSUMPTIONS },
+          headcount,
+          manHoursP50: (headcount * p50StdSec) / 3600,
+          manHoursP90: (headcount * p90StdSec) / 3600,
+          feeds: summary.loads - fedLoads, // 앞으로 필요한 자재 투입(컨베이어 로드) 횟수
         },
         sensitivity: bottleneckSensitivity(lots, 0.1, headElapsedSec),
         consumables: consumableOutlook(lots, headElapsedSec, assets),

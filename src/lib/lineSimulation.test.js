@@ -3,8 +3,9 @@
  *  확률 모델이라도 계약은 결정적이어야 한다 — 시드 고정 rng 로 재현 가능하게 검사한다.
  */
 import { describe, expect, it } from 'vitest';
-import { CYLINDER_CAPACITY, REPEAT_PERIOD_F, lotTotalSec } from '../data/factoryAssets.js';
+import { CYLINDER_CAPACITY, REPEAT_PERIOD_F, completedEaAt, loadPlanFor, lotTotalSec } from '../data/factoryAssets.js';
 import {
+  MANNING_ASSUMPTIONS,
   SIM_ASSUMPTIONS,
   STAGE_FRAMES,
   bottleneckSensitivity,
@@ -17,6 +18,8 @@ import {
   simulateLine,
   timeOfEa,
 } from './lineSimulation.js';
+import { CO2_KG_PER_KWH, linePowerKw } from './energy.js';
+import { TELEMETRY_BASELINES } from '../telemetry/simulatedSource.js';
 
 /* 시드 고정 rng (mulberry32) — 테스트 재현성 */
 const seeded = (seed) => {
@@ -67,6 +70,56 @@ describe('시간 구성 분해', () => {
     expect(r.breakdown.netSec).toBeLessThan(100 * 7.6);
     expect(r.breakdown.netSec).toBeGreaterThan(40 * 7.6);
     expect(r.breakdown.overheadSec).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('전력·인력 전망', () => {
+  it('energy — 정격 kW 는 텔레메트리 기준값의 3상 근사이고, kWh 는 표준초 × 정격이다', async () => {
+    const r = await simulateLine({ lots: [LOT(80)], runs: 300, speed: 4, rng: seeded(11) });
+    expect(r.energy.nominalKw).toBeCloseTo(linePowerKw(TELEMETRY_BASELINES), 10);
+    /* 표준초 = 벽시계 p50 × 배속 — kWh 가 배속의 영향을 받지 않는다는 증거 */
+    const p50StdSec = r.finishWallSec.p50 * 4;
+    const p90StdSec = r.finishWallSec.p90 * 4;
+    expect(r.energy.kwhP50).toBeCloseTo((r.energy.nominalKw * p50StdSec) / 3600, 6);
+    expect(r.energy.kwhP90).toBeCloseTo((r.energy.nominalKw * p90StdSec) / 3600, 6);
+    expect(r.energy.kwhP90).toBeGreaterThanOrEqual(r.energy.kwhP50);
+    expect(r.energy.co2P50Kg).toBeCloseTo(r.energy.kwhP50 * CO2_KG_PER_KWH, 10);
+    expect(r.energy.co2P90Kg).toBeCloseTo(r.energy.kwhP90 * CO2_KG_PER_KWH, 10);
+  });
+
+  it('energy — 같은 시드면 배속이 달라도 kWh 는 동일하다 (배속은 보는 속도일 뿐)', async () => {
+    const a = await simulateLine({ lots: [LOT(60)], runs: 200, speed: 1, rng: seeded(7) });
+    const b = await simulateLine({ lots: [LOT(60)], runs: 200, speed: 8, rng: seeded(7) });
+    expect(a.energy.kwhP50).toBeCloseTo(b.energy.kwhP50, 8);
+    expect(a.energy.kwhP90).toBeCloseTo(b.energy.kwhP90, 8);
+  });
+
+  it('manning — 상주 인원 합 × 표준시간 = 투입 공수, 자재 투입은 로드 수와 같다', async () => {
+    const lots = [LOT(80), LOT(40)];
+    const r = await simulateLine({ lots, runs: 300, speed: 4, rng: seeded(13) });
+    const headcount = Object.values(MANNING_ASSUMPTIONS).reduce((s, v) => s + v, 0);
+    expect(r.manning.headcount).toBeCloseTo(headcount, 10);
+    expect(r.manning.perShift).toEqual(MANNING_ASSUMPTIONS);
+    expect(r.manning.manHoursP50).toBeCloseTo((headcount * r.finishWallSec.p50 * 4) / 3600, 6);
+    expect(r.manning.manHoursP90).toBeGreaterThanOrEqual(r.manning.manHoursP50);
+    expect(r.manning.feeds).toBe(r.summary.loads); // 진행 전에는 전체 계획 = 잔여
+  });
+
+  it('[리뷰수정] manning.feeds — 선두 로트 진행분의 이미 시작된 로드를 빼 공수·kWh 와 같은 잔여 좌표계다', async () => {
+    const lots = [LOT(100)];
+    const half = timeOfEa(lots, 50);
+    const r = await simulateLine({ lots, headElapsedSec: half, runs: 100, rng: seeded(17) });
+    /* 기대값을 독립 계산 — 완료 EA 가 걸친(시작된) 로드는 이미 투입된 것 */
+    const doneEa = completedEaAt(half, 100, 7.6);
+    let cum = 0;
+    let fed = 0;
+    loadPlanFor(100).forEach((sz) => {
+      if (doneEa > cum) fed += 1;
+      cum += sz;
+    });
+    expect(fed).toBeGreaterThan(0);
+    expect(r.manning.feeds).toBe(loadPlanFor(100).length - fed);
+    expect(r.manning.feeds).toBeLessThan(r.summary.loads); // summary.loads 는 전체 계획 그대로
   });
 });
 
