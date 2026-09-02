@@ -201,7 +201,9 @@ const LeftDashboardPanel = ({
   };
 
   return (
-    <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto">
+    /* lg 미만: 3D 아래 전폭 스택 (스크롤은 부모 컨테이너가 담당) */
+    <aside className="w-[320px] shrink-0 h-full flex flex-col gap-3 p-3 overflow-y-auto
+      max-lg:w-full max-lg:h-auto max-lg:overflow-visible max-lg:order-2">
       {/* 작업 진행률 --------------------------------------------- */}
       <Panel theme={theme} className={theme.glow} data-tour="progress">
         <PanelTitle

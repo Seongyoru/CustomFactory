@@ -24,8 +24,12 @@ import { usePersistentState } from '../../lib/persist.js';
  */
 const Scene = React.memo(FactoryScene);
 
+/* 좁은 화면(태블릿·폰)에선 HUD 가 3D 를 다 덮으므로 접힌 채 시작한다 — 토글은 그대로 */
+const startOpenOnWide = () =>
+  typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches;
+
 const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused, repeats = CONVEYOR_LOAD_MAX }) => {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(startOpenOnWide);
   /* 사이클 길이·단계는 현재 로드의 적재 수(반복 횟수)에 따라 달라진다 */
   const cycleSec = cycleSecFor(repeats);
   const phases = processPhasesFor(repeats);
@@ -33,7 +37,7 @@ const ProcessSequenceHud = ({ theme, processTime, animTimeScale, paused, repeats
   const active = phases.filter((p) => processTime >= p.start && processTime <= p.end);
 
   return (
-    <div className={`w-[384px] rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
+    <div className={`w-[384px] max-w-[calc(100vw-32px)] rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
       <header className={`flex items-center justify-between px-2.5 py-1.5 border-b ${theme.divider}`}>
         <div className="flex items-center gap-1.5 min-w-0">
           <Workflow className={`w-3.5 h-3.5 shrink-0 ${theme.accentText}`} />
@@ -112,7 +116,7 @@ const TwinViewport = ({
    * 씬 자체도 이 틱에 휩쓸리지 않도록 memo 로 감싼 Scene 을 쓴다.
    */
   const [processTime, setProcessTime] = useState(0);
-  const [cctvOpen, setCctvOpen] = useState(true);
+  const [cctvOpen, setCctvOpen] = useState(startOpenOnWide);
   const [showGrid, setShowGrid] = useState(true);
   const [showShell, setShowShell] = useState(true);
   const [shellOpacity, setShellOpacity] = useState(0.5);
@@ -154,7 +158,9 @@ const TwinViewport = ({
   ];
 
   return (
-    <main className="relative flex-1 min-w-0 h-full p-3 pl-0">
+    /* lg 미만: 스택 최상단에 고정 높이로 — h-full 은 세로 스택에서 무의미해진다 */
+    <main className="relative flex-1 min-w-0 h-full p-3 pl-0
+      max-lg:order-1 max-lg:flex-none max-lg:w-full max-lg:h-[46vh] max-lg:min-h-[320px] max-lg:pl-3">
       <div
         ref={wrapperRef}
         data-tour="viewport"
@@ -211,11 +217,12 @@ const TwinViewport = ({
         )}
 
         {/* --- 좌상단 상태 HUD + 설비 빠른 이동 --- */}
-        <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
+        <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none max-w-[calc(100%-80px)] max-lg:flex-wrap">
           <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold border ${theme.chip}`}>
             {mode === 'simulation' ? `SIMULATION ×${fmtSpeed(speed)}` : 'LIVE'}
           </span>
-          <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold tabular-nums
+          {/* 날짜+시각 박스는 폰에선 숨긴다 — 하단 상태바의 Sync 시각과 중복이고 좁아서 구겨진다 */}
+          <span className={`max-sm:hidden flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold tabular-nums
             border ${theme.panelBorder} ${theme.overlayBg} ${theme.textPrimary} backdrop-blur-sm`}>
             {mode === 'operation' && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
             {mode === 'operation' ? `${fmtDate(now)}  ${fmtClock(now)}` : `T+ ${fmtDuration(simElapsed)}`}
@@ -336,8 +343,8 @@ const TwinViewport = ({
           </div>
         )}
 
-        {/* --- 우하단 조작 안내 --- */}
-        <div className="absolute bottom-3 right-3 pointer-events-none">
+        {/* --- 우하단 조작 안내 — 마우스 전제라 터치 화면(lg 미만)에선 숨긴다 --- */}
+        <div className="absolute bottom-3 right-3 pointer-events-none max-lg:hidden">
           <p className={`rounded-md border ${theme.panelBorder} ${theme.overlayBg} px-2.5 py-1.5 text-[10px] leading-relaxed ${theme.textMuted} backdrop-blur-sm`}>
             좌클릭 드래그 <span className={theme.textPrimary}>회전</span> · 휠{' '}
             <span className={theme.textPrimary}>확대</span> · 우클릭 드래그{' '}
@@ -347,7 +354,8 @@ const TwinViewport = ({
         </div>
 
         {/* --- 좌하단 : 공정 시퀀스 HUD + CCTV PIP --- */}
-        <div className="absolute bottom-3 left-3 flex flex-col items-start gap-2 pointer-events-none">
+        {/* 좁은 화면에선 HUD 스택 전체를 화면 폭 안으로 clamp */}
+        <div className="absolute bottom-3 left-3 flex flex-col items-start gap-2 pointer-events-none max-w-[calc(100%-24px)]">
           <div className="pointer-events-auto">
             <ProcessSequenceHud
               theme={theme}
@@ -358,7 +366,7 @@ const TwinViewport = ({
             />
           </div>
 
-          <div className={`pointer-events-auto rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
+          <div className={`pointer-events-auto max-w-full rounded-lg border ${theme.panelBorder} ${theme.overlayBg} backdrop-blur-md ${theme.glow}`}>
             <header className={`flex items-center justify-between px-2.5 py-1.5 border-b ${theme.divider}`}>
               <div className="flex items-center gap-1.5">
                 <Video className={`w-3.5 h-3.5 ${theme.accentText}`} />
@@ -377,11 +385,11 @@ const TwinViewport = ({
             </header>
 
             {cctvOpen && (
-              <div className="flex gap-2 p-2">
+              <div className="flex gap-2 p-2 max-w-full overflow-x-auto">
                 {cctvFeeds.map((cam) => (
                   <figure
                     key={cam.id}
-                    className={`relative w-[184px] aspect-video rounded-md overflow-hidden border ${theme.panelBorder} bg-slate-950 group`}
+                    className={`relative w-[184px] shrink-0 aspect-video rounded-md overflow-hidden border ${theme.panelBorder} bg-slate-950 group`}
                   >
                     <CctvVideo src={cam.src} variant="pip" />
                     <div

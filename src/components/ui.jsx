@@ -191,8 +191,9 @@ export const ConsumableBar = ({ label, percent, theme }) => {
 /** 모달 공통 셸 — 등장 시 팝 인 */
 export const Modal = ({ theme, onClose, children, className = 'w-[460px]' }) => (
   <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+    {/* max-w 기본값 — 고정폭 모달(460~900px)이 폰 화면을 넘지 않게 공통으로 clamp */}
     <div
-      className={`anim-pop ${className} max-h-full overflow-hidden rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl`}
+      className={`anim-pop max-w-[94vw] ${className} max-h-full overflow-hidden rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl`}
       onClick={(e) => e.stopPropagation()}
     >
       {children}

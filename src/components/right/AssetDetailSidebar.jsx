@@ -150,8 +150,10 @@ const AssetDetailSidebar = ({
   };
 
   return (
+    /* lg 미만: 3D 영역(46vh)에 붙이지 않고 화면 전체 높이 드로어로 승격 */
     <aside
       className={`absolute top-0 right-0 h-full w-[360px] z-20 transition-transform duration-300 ease-out
+        max-lg:fixed max-lg:z-40 max-lg:w-[min(360px,100vw)]
         ${open ? 'translate-x-0' : 'translate-x-full'}`}
       aria-hidden={!open}
     >

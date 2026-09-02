@@ -38,7 +38,9 @@ const TopGnb = ({
   }, [menuOpen]);
 
   return (
-  <header className={`h-14 shrink-0 flex items-center justify-between gap-4 px-4 border-b ${theme.panelBorder} ${theme.headerBg} z-30`}>
+  /* lg 미만: 고정 높이를 풀고 그룹 단위 줄바꿈 — 모든 버튼이 폰 폭에서도 닿게 */
+  <header className={`h-14 shrink-0 flex items-center justify-between gap-4 px-4 border-b ${theme.panelBorder} ${theme.headerBg} z-30
+    max-lg:h-auto max-lg:flex-wrap max-lg:gap-x-3 max-lg:gap-y-2 max-lg:py-2`}>
     {/* --- 좌: 로고 + 라인 선택 --- */}
     <div className="flex items-center gap-4 min-w-0">
       <div className="flex items-center gap-2 shrink-0">
@@ -99,7 +101,8 @@ const TopGnb = ({
           ${theme.panelBorder} ${theme.textMuted} ${theme.hoverBg}`}
       >
         <Siren className="w-3.5 h-3.5" />
-        오류 상황 테스트
+        <span className="max-sm:hidden">오류 상황 테스트</span>
+        <span className="sm:hidden">오류 테스트</span>
       </button>
 
       <div className={`relative flex items-center p-1 rounded-full border ${theme.panelBorder} ${theme.subtleBg}`} data-tour="mode">
@@ -108,25 +111,26 @@ const TopGnb = ({
           ${theme.accentBg} ${mode === 'operation' ? 'left-1' : 'left-[calc(50%+3px)]'}`}
       />
       {[
-        { key: 'operation', label: '운전 모드', icon: Activity },
-        { key: 'simulation', label: '시뮬레이션 모드', icon: Cpu },
-      ].map(({ key, label, icon: Icon }) => (
+        { key: 'operation', label: '운전 모드', short: '운전', icon: Activity },
+        { key: 'simulation', label: '시뮬레이션 모드', short: '시뮬레이션', icon: Cpu },
+      ].map(({ key, label, short, icon: Icon }) => (
         <button
           key={key}
           type="button"
           onClick={() => onModeChange(key)}
           className={`relative z-10 flex items-center gap-1.5 px-4 h-7 rounded-full text-[11px] font-semibold
-            transition-colors ${mode === key ? 'text-white' : `${theme.textMuted}`}`}
+            max-sm:px-3 transition-colors ${mode === key ? 'text-white' : `${theme.textMuted}`}`}
         >
           <Icon className="w-3.5 h-3.5" />
-          {label}
+          <span className="max-sm:hidden">{label}</span>
+          <span className="sm:hidden">{short}</span>
         </button>
       ))}
       </div>
     </div>
 
     {/* --- 우: 리포트 + 시계 + 테마 + E-STOP + 프로필 --- */}
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-2.5 max-lg:flex-wrap max-lg:gap-y-2">
       <button
         type="button"
         data-tour="report"
@@ -205,7 +209,7 @@ const TopGnb = ({
         {eStopEngaged ? 'E-STOP 작동 중' : '비상 정지'}
       </button>
 
-      <div className={`h-6 w-px ${theme.dividerStrong}`} />
+      <div className={`h-6 w-px max-lg:hidden ${theme.dividerStrong}`} />
 
       {/* 프로필 + 로그아웃 드롭다운 */}
       <div className="relative" ref={menuRef} data-tour="profile">

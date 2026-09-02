@@ -1131,7 +1131,8 @@ export default function DigitalTwinDashboard() {
         />
       )}
 
-      <div className={`relative flex-1 min-h-0 ${view === 'overview' ? 'hidden' : 'flex'}`}>
+      {/* lg 미만(태블릿·폰)은 [3D → 좌패널] 세로 스택 + 이 영역만 스크롤 — 데스크톱 레이아웃은 무변경 */}
+      <div className={`relative flex-1 min-h-0 max-lg:flex-col max-lg:overflow-y-auto ${view === 'overview' ? 'hidden' : 'flex'}`}>
         <LeftDashboardPanel
           theme={theme}
           mode={mode}
@@ -1226,9 +1227,10 @@ export default function DigitalTwinDashboard() {
       {/* 하단 스테이터스 바 */}
       <footer
         className={`h-7 shrink-0 flex items-center justify-between px-4 border-t ${theme.panelBorder}
-          ${theme.headerBg} text-[10px] tabular-nums ${theme.textFaint}`}
+          ${theme.headerBg} text-[10px] tabular-nums ${theme.textFaint}
+          max-lg:h-auto max-lg:flex-wrap max-lg:gap-x-3 max-lg:gap-y-1 max-lg:py-1.5`}
       >
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 max-lg:flex-wrap max-lg:gap-x-3 max-lg:gap-y-1">
           {/* 데이터 소스 상태 — 시뮬레이션/실계측·연결 상태를 정직하게 표시.
               누구나 클릭해 현재 소스·연결 안내를 볼 수 있고, 전환은 관리자만 가능하다
               (연결 실패 시 비관리자에게도 원인·조치 안내가 닿아야 한다) */}
@@ -1271,7 +1273,7 @@ export default function DigitalTwinDashboard() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 max-lg:flex-wrap max-lg:gap-x-3 max-lg:gap-y-1">
           <span>선택 가능 설비 {SELECTABLE_ASSETS.length}대</span>
           <span>{mode === 'simulation' ? `SIM ${fmtSpeed(speed)}x` : 'REALTIME 1.0x'}</span>
           <span>{eStopEngaged ? '3D 정지' : `3D ×${fmtAnimScale(animTimeScale)}`}</span>

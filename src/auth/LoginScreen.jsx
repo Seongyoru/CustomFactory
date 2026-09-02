@@ -64,7 +64,7 @@ const LoginScreen = ({ theme, onLogin }) => {
         />
       </div>
 
-      <div className={`anim-pop relative w-[420px] rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl ${theme.glow} overflow-hidden`}>
+      <div className={`anim-pop relative w-[420px] max-w-[92vw] rounded-2xl border ${theme.panelBorder} ${theme.headerBg} shadow-2xl ${theme.glow} overflow-hidden`}>
         {/* 브랜드 헤더 */}
         <header className={`px-6 pt-7 pb-5 text-center border-b ${theme.divider}`}>
           <div className="flex items-center justify-center gap-2.5">

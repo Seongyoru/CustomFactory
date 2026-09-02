@@ -101,12 +101,12 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
     <div className="relative flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-[1100px] mx-auto p-6 space-y-5">
         {/* 헤더 — 공장 전체 요약 */}
-        <header className="flex items-end justify-between gap-3">
+        <header className="flex items-end justify-between gap-3 max-lg:flex-wrap max-lg:items-center">
           <div>
             <p className={`text-[10px] font-semibold tracking-widest ${theme.accentText}`}>PLANT OVERVIEW</p>
             <h2 className={`mt-1 text-xl font-bold ${theme.textPrimary}`}>전 라인 관제</h2>
           </div>
-          <div className={`flex items-center gap-4 text-[11px] tabular-nums ${theme.textMuted}`}>
+          <div className={`flex items-center gap-4 text-[11px] tabular-nums ${theme.textMuted} max-lg:flex-wrap max-lg:gap-x-3 max-lg:gap-y-1`}>
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" /> 가동 {running}
             </span>
@@ -125,7 +125,7 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
         </header>
 
         {/* 공장 합계 밴드 */}
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-5 gap-2 max-lg:grid-cols-3 max-sm:grid-cols-2">
           {[
             [
               '금일 총생산',
@@ -156,7 +156,7 @@ const PlantOverview = ({ theme, data = [], now, onEnterLine }) => {
         </div>
 
         {/* 라인 카드 그리드 */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
           {data.map((d) => {
             const state = cardStateOf(d);
             const alert = state.key === 'estop' || state.key === 'alarm';

@@ -379,7 +379,7 @@ const ReportModal = ({
   const td = `px-3 py-1.5 whitespace-nowrap`;
 
   return (
-    <Modal theme={theme} onClose={onClose} className="w-[880px]">
+    <Modal theme={theme} onClose={onClose} className="w-[880px] max-w-[94vw]">
       <header className={`flex items-center justify-between px-5 py-3.5 border-b ${theme.panelBorder} ${theme.accentBgSoft}`}>
         <div className="flex items-center gap-2">
           <BarChart3 className={`w-4 h-4 ${theme.accentText}`} />
@@ -524,7 +524,7 @@ const ReportModal = ({
             )}
 
             {/* 완료 작업 테이블 */}
-            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
                   <tr className={`border-b ${theme.divider}`}>
@@ -582,7 +582,7 @@ const ReportModal = ({
             </div>
 
             {/* 소모품·점검 현황 — 라인×설비 전체 */}
-            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
                   <tr className={`border-b ${theme.divider}`}>
@@ -629,7 +629,7 @@ const ReportModal = ({
             </section>
 
             {/* 보전 지표 — MTTA/MTTR/MTBF */}
-            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
               <div className={`flex items-center justify-between px-3 py-2 border-b ${theme.divider} ${theme.headerBg}`}>
                 <span className={`text-[11px] font-bold ${theme.textPrimary}`}>보전 지표 (알람 기준)</span>
                 <span className={`text-[9px] ${theme.textFaint}`}>
@@ -674,7 +674,7 @@ const ReportModal = ({
             </section>
 
             {/* 소모품 교체 이력 */}
-            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
                   <tr className={`border-b ${theme.divider}`}>
@@ -770,7 +770,7 @@ const ReportModal = ({
             })()}
 
             {/* 12컬럼이 880px 폭에 빠듯하다 — 넘치면 잘리는 대신 가로 스크롤로 살린다 */}
-            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+            <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
               <div className="overflow-x-auto">
               <table className="w-full text-[11px]">
                 <thead className={theme.headerBg}>
@@ -894,7 +894,7 @@ const ReportModal = ({
         )}
 
         {(tab === 'alarms' || tab === 'audit') && (
-          <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden`}>
+          <section className={`rounded-lg border ${theme.panelBorder} overflow-hidden max-lg:overflow-x-auto`}>
             <table className="w-full text-[11px]">
               <thead className={theme.headerBg}>
                 <tr className={`border-b ${theme.divider}`}>
