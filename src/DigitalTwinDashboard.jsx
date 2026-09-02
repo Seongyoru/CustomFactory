@@ -145,6 +145,11 @@ let alarmSeq = 0;
 export default function DigitalTwinDashboard() {
   /* 기본은 라이트. 키를 ui.appearance 로 올려 예전 자동 저장값(dark)에 안 끌려간다 */
   const [appearance, setAppearance] = usePersistentState('ui.appearance', 'light');
+  /* 모바일 브라우저의 '웹사이트 어둡게'(강제 다크) 방어 — 라이트일 땐 only light 로 반전을 거부하고,
+     사용자가 다크를 고르면 dark 를 선언해 브라우저 기본 UI(스크롤바 등)도 맞춘다 */
+  useEffect(() => {
+    document.documentElement.style.colorScheme = appearance === 'dark' ? 'dark' : 'only light';
+  }, [appearance]);
   /* 로그인 세션 — { id, name, role, at }. 없으면 로그인 화면만 보인다. */
   const [session, setSession] = usePersistentState('session', null);
   const [mode, setMode] = useState('operation');
@@ -1073,7 +1078,8 @@ export default function DigitalTwinDashboard() {
       : null;
 
   return (
-    <div className={`w-screen h-screen overflow-hidden flex flex-col font-sans ${theme.appBg} ${theme.textSecondary} transition-colors duration-300`}>
+    /* 모바일 100vh 는 주소창 높이만큼 실화면보다 길어 GNB 상단이 잘린다 — lg 미만은 dvh */
+    <div className={`w-screen h-screen max-lg:h-dvh overflow-hidden flex flex-col font-sans ${theme.appBg} ${theme.textSecondary} transition-colors duration-300`}>
       {/* 시뮬레이션 / E-STOP 전역 프레임 */}
       <div
         className={`pointer-events-none fixed inset-0 z-40 ring-2 ring-inset transition-all duration-500

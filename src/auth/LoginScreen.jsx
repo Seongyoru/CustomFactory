@@ -33,7 +33,7 @@ const LoginScreen = ({ theme, onLogin }) => {
 
   const isDark = theme.appearance === 'dark';
   return (
-    <div className={`relative w-screen h-screen grid place-items-center font-sans overflow-hidden ${theme.appBg}`}>
+    <div className={`relative w-screen h-screen max-lg:h-dvh grid place-items-center font-sans overflow-hidden ${theme.appBg}`}>
       {/* 배경 연출 — 포인트 컬러 광원 2개가 천천히 떠다니고, 산업 도면풍 그리드가 깔린다 */}
       <div className="pointer-events-none absolute inset-0" aria-hidden>
         <div

@@ -663,3 +663,9 @@ KIOSK_STARTED 이벤트 타입은 과거 로그 라벨용으로만 잔존.
 - 검증: 375/768/1440 실측 — 넘침 요소 0, 모든 GNB 버튼 접근 가능, 데스크톱 원형(GNB 56px·aside 320px
   ·상태바 28px·HUD 펼침) 보존. 테스트 105개·빌드 통과
 - 검증 환경 메모: 숨김 팬에서는 CSS transition 도 동결됨 — 위치 판정은 rect 가 아니라 offsetLeft/computed 로
+
+## 2026-09-02 — 모바일 후속 2건 (실기기 스크린샷 피드백)
+
+- GNB 상단 잘림: 모바일 100vh 가 주소창만큼 실화면보다 길던 문제 — 루트·로그인에 max-lg:h-dvh
+- 강제 다크 반전: 앱은 라이트인데(토글이 달 아이콘) 브라우저 '웹사이트 어둡게'가 반전시킨 것 —
+  meta color-scheme "only light" + 다크 토글 시 JS 로 colorScheme=dark 선언 (표준 opt-out)
